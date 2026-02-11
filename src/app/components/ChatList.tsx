@@ -1,15 +1,21 @@
-import { useNavigate, useParams } from 'react-router';
+import { useNavigate, useParams } from 'react-router'; // 'react-router' v7
 import { Search, MessageSquarePlus, Settings } from 'lucide-react';
 import { Input } from './ui/input';
 import { Button } from './ui/button';
 import { ChatListItem } from './ChatListItem';
-import { chats, currentUser } from '../data/mockData';
 import { useState } from 'react';
+
+// Use store for currentUser, but keep static chats for now
+import { useChatStore } from '../../core/store/chatStore';
+import { chats } from '../../core/data/mockData';
 
 export function ChatList() {
   const navigate = useNavigate();
   const { chatId } = useParams();
   const [searchQuery, setSearchQuery] = useState('');
+  
+  // Get currentUser from store
+  const { currentUser } = useChatStore();
 
   const filteredChats = chats.filter((chat) => {
     const otherUser = chat.participants.find((p) => p.id !== currentUser.id);

@@ -1,25 +1,32 @@
-import { useState, useRef, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router';
+import { useRef, useEffect, useState } from 'react';
+import { useParams } from 'react-router'; // 'react-router' v7
 import { Send, Image, Video, Smile, MoreVertical } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { MessageBubble } from './MessageBubble';
-import { chats, messages as initialMessages, currentUser } from '../data/mockData';
-import { Message } from '../types';
+// Import the store instead of static messages
+import { useChatStore } from '../../core/store/chatStore';
+// Import static "chats" for metadata, but use store for "currentUser"
+import { chats } from '../../core/data/mockData'; 
+import { Message } from '../../core/types';
 
 export function ChatView() {
   const { chatId } = useParams();
-  const navigate = useNavigate();
-  const [messages, setMessages] = useState(initialMessages);
+  
+  // Connect to the store
+  const { messages, currentUser, addMessage } = useChatStore();
+  
   const [newMessage, setNewMessage] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const videoInputRef = useRef<HTMLInputElement>(null);
 
+  // Derive state from the store
   const chat = chats.find((c) => c.id === chatId);
   const chatMessages = messages.filter((m) => m.chatId === chatId);
   const otherUser = chat?.participants.find((p) => p.id !== currentUser.id);
 
+  // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatMessages]);
@@ -47,7 +54,7 @@ export function ChatView() {
       timestamp: new Date(),
     };
 
-    setMessages([...messages, message]);
+    addMessage(message); // Uses the store action
     setNewMessage('');
   };
 
@@ -58,7 +65,8 @@ export function ChatView() {
     }
   };
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Helper to handle file uploads generically
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, type: 'image' | 'video') => {
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
@@ -67,30 +75,11 @@ export function ChatView() {
           id: `msg-${Date.now()}`,
           chatId: chatId!,
           senderId: currentUser.id,
-          type: 'image',
+          type,
           content: event.target?.result as string,
           timestamp: new Date(),
         };
-        setMessages([...messages, message]);
-      };
-      reader.readAsDataURL(file);
-    }
-  };
-
-  const handleVideoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const message: Message = {
-          id: `msg-${Date.now()}`,
-          chatId: chatId!,
-          senderId: currentUser.id,
-          type: 'video',
-          content: event.target?.result as string,
-          timestamp: new Date(),
-        };
-        setMessages([...messages, message]);
+        addMessage(message);
       };
       reader.readAsDataURL(file);
     }
@@ -151,14 +140,14 @@ export function ChatView() {
           <input
             type="file"
             ref={fileInputRef}
-            onChange={handleImageUpload}
+            onChange={(e) => handleFileUpload(e, 'image')}
             accept="image/*"
             className="hidden"
           />
           <input
             type="file"
             ref={videoInputRef}
-            onChange={handleVideoUpload}
+            onChange={(e) => handleFileUpload(e, 'video')}
             accept="video/*"
             className="hidden"
           />
