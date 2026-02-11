@@ -1,7 +1,10 @@
 
-  # Chat and Video Sharing App
+  # Nomikai ("drinking party") 
 
-  This is a code bundle for Chat and Video Sharing App. The original project is available at https://www.figma.com/design/qXLllwOSzRqd9nyg2a8Kbo/Chat-and-Video-Sharing-App.
+  This is a mockup in Vite thatt I worked up in Figma for use with libkyu.
+  Hopefully it will implement QQX5's improved streaming compression algorithm.
+  This is still highly transitional and just in place to do some testing with the
+  front end components while everything is still loosely coupled together :3
 
   ## Running the code
 
