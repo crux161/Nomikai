@@ -1,22 +1,32 @@
 import { useRef, useEffect, useState } from 'react';
-import { useParams } from 'react-router';
+import { useParams } from 'react-router'; 
 import { Send, Image, Video, Smile, MoreVertical } from 'lucide-react';
-import { listen } from '@tauri-apps/api/event'; // <--- NEW IMPORT
+import { listen } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
 
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { MessageBubble } from './MessageBubble';
+// Ensure these point to your refactored src/core location
 import { useChatStore } from '../../core/store/chatStore';
 import { chats } from '../../core/data/mockData'; 
 import { Message } from '../../core/types';
 
-import { invoke } from '@tauri-apps/api/core';
+// Define the shape of the data coming from Rust
+interface ChatPacket {
+  sender_id: string;
+  sender_name: string;
+  content: string;
+  timestamp: number;
+}
 
 export function ChatView() {
   const { chatId } = useParams();
-  const { messages, currentUser, addMessage } = useChatStore();
-  const [newMessage, setNewMessage] = useState('');
   
+  // Use the Store for messages (Single Source of Truth)
+  const { messages, currentUser, addMessage } = useChatStore();
+  
+  const [newMessage, setNewMessage] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const videoInputRef = useRef<HTMLInputElement>(null);
@@ -25,50 +35,35 @@ export function ChatView() {
   const chatMessages = messages.filter((m) => m.chatId === chatId);
   const otherUser = chat?.participants.find((p) => p.id !== currentUser.id);
 
-  // --- NEW: Event Listener for Rust Stream ---
-  //
-
-  const handleSendMessage = async () => {
-    if (!newMessage.trim()) return;
-
-    // 1. Optimistic Update: Show the message immediately in our own UI
-    const message: Message = {
-      id: `msg-${Date.now()}`,
-      chatId: chatId!,
-      senderId: currentUser.id,
-      type: 'text',
-      content: newMessage,
-      timestamp: new Date(),
-    };
-    addMessage(message);
-    setNewMessage('');
-
-    // 2. Send to the P2P Network via Rust
-    try {
-      await invoke('send_chat_message', { message: message.content });
-    } catch (error) {
-      console.error("Failed to publish message:", error);
-    }
-  };
-
+  // --- P2P Listener ---
   useEffect(() => {
     let unlisten: (() => void) | undefined;
 
     const setupListener = async () => {
-      // Listen for 'stream-event' from Rust
-      unlisten = await listen<string>('stream-event', (event) => {
-        console.log('Received from Rust:', event.payload);
+      // Listen for the 'stream-event' from Rust
+      unlisten = await listen<ChatPacket>('stream-event', (event) => {
+        const packet = event.payload;
         
-        // Push to the store
-        // We use a safe check for chatId to avoid errors if user is on home screen
+        console.log('Received P2P Packet:', packet);
+
+        // SAFETY CHECK: Ensure packet is an object and has content
+        // This prevents the "children use an array" crash if bad data arrives
+        if (!packet || typeof packet !== 'object' || !packet.content) {
+            console.warn("Ignored malformed packet:", packet);
+            return;
+        }
+        
+        // Don't echo our own messages if we already added them optimistically
+        if (packet.sender_id === currentUser.id) return; 
+
         if (chatId) {
             addMessage({
-              id: `stream-${Date.now()}`,
+              id: `stream-${Date.now()}-${Math.random()}`,
               chatId: chatId, 
-              senderId: 'system-stream', // distinct ID for styling if needed
+              senderId: packet.sender_id, // Use the real Peer ID
               type: 'text',
-              content: event.payload,
-              timestamp: new Date(),
+              content: packet.content,    // <--- CRITICAL: Extract string content
+              timestamp: new Date(packet.timestamp * 1000), // Convert Unix timestamp to Date
             });
         }
       });
@@ -76,12 +71,11 @@ export function ChatView() {
 
     setupListener();
 
-    // Cleanup when component unmounts
     return () => {
       if (unlisten) unlisten();
     };
-  }, [addMessage, chatId]);
-  // -------------------------------------------
+  }, [addMessage, chatId, currentUser.id]);
+  // ---------------------
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -98,6 +92,32 @@ export function ChatView() {
     );
   }
 
+  const handleSendMessage = async () => {
+    if (!newMessage.trim()) return;
+
+    // 1. Optimistic Update (Show it immediately)
+    const message: Message = {
+      id: `msg-${Date.now()}`,
+      chatId: chatId!,
+      senderId: currentUser.id,
+      type: 'text',
+      content: newMessage,
+      timestamp: new Date(),
+    };
+
+    addMessage(message);
+    setNewMessage('');
+
+    // 2. Send to Network via Rust
+    try {
+      await invoke('send_chat_message', { 
+        name: currentUser.name, // Send our name so others see it
+        message: message.content 
+      });
+    } catch (error) {
+      console.error("Failed to send P2P message:", error);
+    }
+  };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -106,6 +126,7 @@ export function ChatView() {
     }
   };
 
+  // Helper to handle file uploads
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, type: 'image' | 'video') => {
     const file = e.target.files?.[0];
     if (file) {
@@ -127,11 +148,12 @@ export function ChatView() {
 
   return (
     <div className="flex-1 flex flex-col h-screen">
+      {/* Header */}
       <div className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="relative">
             <img src={otherUser.avatar} alt={otherUser.name} className="w-10 h-10 rounded-full object-cover" />
-            <div className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-white ${otherUser.status === 'online' ? 'bg-green-500' : otherUser.status === 'away' ? 'bg-yellow-500' : 'bg-gray-400'}`} />
+            <div className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-white ${otherUser.status === 'online' ? 'bg-green-500' : 'bg-gray-400'}`} />
           </div>
           <div>
             <h2 className="font-semibold">{otherUser.name}</h2>
@@ -141,13 +163,21 @@ export function ChatView() {
         <Button variant="ghost" size="icon"><MoreVertical className="w-5 h-5" /></Button>
       </div>
 
+      {/* Messages */}
       <div className="flex-1 overflow-y-auto bg-gradient-to-br from-blue-50 to-cyan-50 px-6 py-4">
         {chatMessages.map((message) => {
-          const sender = chat.participants.find((p) => p.id === message.senderId);
-          // If sender is undefined (e.g. system-stream), mock a fallback
-          const displayName = sender ? sender.name : "System Stream";
-          const displayAvatar = sender ? sender.avatar : ""; 
+          // Try to find known user from mock data
+          const knownSender = chat.participants.find((p) => p.id === message.senderId);
           
+          // Fallback for P2P peers not in our mock data
+          const displayName = knownSender 
+              ? knownSender.name 
+              : `Peer ${message.senderId.slice(0, 6)}...`;
+
+          const displayAvatar = knownSender 
+              ? knownSender.avatar 
+              : `https://api.dicebear.com/7.x/identicon/svg?seed=${message.senderId}`;
+
           return (
             <MessageBubble
               key={message.id}
@@ -161,6 +191,7 @@ export function ChatView() {
         <div ref={messagesEndRef} />
       </div>
 
+      {/* Input */}
       <div className="bg-white border-t border-gray-200 px-6 py-4">
         <div className="flex items-center gap-2">
           <input type="file" ref={fileInputRef} onChange={(e) => handleFileUpload(e, 'image')} accept="image/*" className="hidden" />
@@ -175,7 +206,15 @@ export function ChatView() {
           <Button variant="ghost" size="icon" className="text-blue-600 hover:text-blue-700 hover:bg-blue-50">
             <Smile className="w-5 h-5" />
           </Button>
-          <Input value={newMessage} onChange={(e) => setNewMessage(e.target.value)} onKeyPress={handleKeyPress} placeholder="Type a message..." className="flex-1 border-gray-300 focus:border-blue-500 focus:ring-blue-500" />
+
+          <Input
+            value={newMessage}
+            onChange={(e) => setNewMessage(e.target.value)}
+            onKeyPress={handleKeyPress}
+            placeholder="Type a message..."
+            className="flex-1 border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+          />
+
           <Button onClick={handleSendMessage} disabled={!newMessage.trim()} className="bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700">
             <Send className="w-5 h-5" />
           </Button>
