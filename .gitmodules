@@ -1,0 +1,3 @@
+[submodule "core/sankaku"]
+	path = core/sankaku
+	url = https://github.com/crux161/sankaku

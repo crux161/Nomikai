@@ -30,6 +30,8 @@
 	<true/>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Nomikai needs local network access to discover and transfer files to nearby Kyu2 mesh nodes.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Nomikai uses the camera to test hardware HEVC video capture and encoding.</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UIFileSharingEnabled</key>
