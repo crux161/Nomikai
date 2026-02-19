@@ -1,0 +1,4 @@
+#include "../../Flutter/Flutter-Debug.xcconfig"
+#include "Warnings.xcconfig"
+OTHER_LDFLAGS = $(inherited) -lc++
+MACOSX_DEPLOYMENT_TARGET = 10.15

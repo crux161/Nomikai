@@ -1,0 +1,28 @@
+PODS:
+  - file_picker (0.0.1):
+    - FlutterMacOS
+  - FlutterMacOS (1.0.0)
+  - rust_lib_nomikai (0.0.1):
+    - FlutterMacOS
+
+DEPENDENCIES:
+  - file_picker (from `Flutter/ephemeral/.symlinks/plugins/file_picker/macos`)
+  - FlutterMacOS (from `Flutter/ephemeral`)
+  - rust_lib_nomikai (from `Flutter/ephemeral/.symlinks/plugins/rust_lib_nomikai/macos`)
+
+EXTERNAL SOURCES:
+  file_picker:
+    :path: Flutter/ephemeral/.symlinks/plugins/file_picker/macos
+  FlutterMacOS:
+    :path: Flutter/ephemeral
+  rust_lib_nomikai:
+    :path: Flutter/ephemeral/.symlinks/plugins/rust_lib_nomikai/macos
+
+SPEC CHECKSUMS:
+  file_picker: 7584aae6fa07a041af2b36a2655122d42f578c1a
+  FlutterMacOS: d0db08ddef1a9af05a5ec4b724367152bb0500b1
+  rust_lib_nomikai: 502e20e78f48f417e793ed7d66e57af9b6bdf724
+
+PODFILE CHECKSUM: 3fe72175df33f9cd363e3dcb0c1456beb1dc14f4
+
+COCOAPODS: 1.16.2

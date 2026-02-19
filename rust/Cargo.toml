@@ -1,0 +1,15 @@
+[package]
+name = "rust_lib_nomikai"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+anyhow = "1.0.101"
+flutter_rust_bridge = "=2.11.1"
+kyu2-core = { path = "../../kyu2/kyu2-core" }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
