@@ -33,5 +33,5 @@ To build and run Nomikai, you will need the following development toolchains ins
 ### Setup
 1. Clone the repository:
    ```bash
-   git clone <YOUR_REPO_URL>
+   git clone https://github.com/crux161/Nomikai
    cd nomikai
