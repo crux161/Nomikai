@@ -1,4 +1,5 @@
 import AVFoundation
+import Flutter
 import Foundation
 import VideoToolbox
 
@@ -8,8 +9,6 @@ private enum HevcDumperError: LocalizedError {
   case cannotAddInput
   case cannotAddOutput
   case cannotCreateEncoder(status: OSStatus)
-  case cannotCreateOutputFile
-  case noOutputFileURL
   case notRecording
 
   var errorDescription: String? {
@@ -24,17 +23,13 @@ private enum HevcDumperError: LocalizedError {
       return "Failed to add AVCaptureVideoDataOutput to AVCaptureSession."
     case .cannotCreateEncoder(let status):
       return "Failed to create HEVC encoder session (status \(status))."
-    case .cannotCreateOutputFile:
-      return "Failed to create output .h265 file."
-    case .noOutputFileURL:
-      return "Output file URL is not set."
     case .notRecording:
       return "No active HEVC recording session."
     }
   }
 }
 
-final class HevcDumper: NSObject {
+final class HevcDumper: NSObject, FlutterStreamHandler {
   private static let annexBStartCode = Data([0x00, 0x00, 0x00, 0x01])
   private static let hevcOutputCallback: VTCompressionOutputCallback = {
     outputCallbackRefCon,
@@ -58,13 +53,23 @@ final class HevcDumper: NSObject {
   private let captureSession = AVCaptureSession()
   private let videoOutput = AVCaptureVideoDataOutput()
   private let sessionQueue = DispatchQueue(label: "com.nomikai.sankaku.hevc_dumper.session")
-  private let fileQueue = DispatchQueue(label: "com.nomikai.sankaku.hevc_dumper.file")
 
   private var compressionSession: VTCompressionSession?
-  private var outputURL: URL?
-  private var fileHandle: FileHandle?
+  private var eventSink: FlutterEventSink?
 
   private(set) var isRecording = false
+
+  func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink)
+    -> FlutterError?
+  {
+    eventSink = events
+    return nil
+  }
+
+  func onCancel(withArguments arguments: Any?) -> FlutterError? {
+    eventSink = nil
+    return nil
+  }
 
   func startRecording(completion: @escaping (Error?) -> Void) {
     let authorization = AVCaptureDevice.authorizationStatus(for: .video)
@@ -98,11 +103,11 @@ final class HevcDumper: NSObject {
     }
   }
 
-  func stopRecording(completion: @escaping (String?, Error?) -> Void) {
+  func stopRecording(completion: @escaping (Error?) -> Void) {
     sessionQueue.async {
       guard self.isRecording else {
         DispatchQueue.main.async {
-          completion(nil, HevcDumperError.notRecording)
+          completion(HevcDumperError.notRecording)
         }
         return
       }
@@ -116,19 +121,10 @@ final class HevcDumper: NSObject {
       }
 
       self.videoOutput.setSampleBufferDelegate(nil, queue: nil)
-
-      self.fileQueue.sync {
-        self.fileHandle?.synchronizeFile()
-        self.fileHandle?.closeFile()
-        self.fileHandle = nil
-      }
-
-      let path = self.outputURL?.path
-      self.outputURL = nil
       self.isRecording = false
 
       DispatchQueue.main.async {
-        completion(path, nil)
+        completion(nil)
       }
     }
   }
@@ -142,8 +138,6 @@ final class HevcDumper: NSObject {
     }
 
     do {
-      outputURL = try createOutputURL()
-
       let dimensions = try configureCaptureSession()
       try configureCompressionSession(width: dimensions.width, height: dimensions.height)
 
@@ -240,26 +234,6 @@ final class HevcDumper: NSObject {
     self.compressionSession = compressionSession
   }
 
-  private func createOutputURL() throws -> URL {
-    guard
-      let documentsURL = FileManager.default.urls(
-        for: .documentDirectory,
-        in: .userDomainMask
-      ).first
-    else {
-      throw HevcDumperError.cannotCreateOutputFile
-    }
-
-    let timestamp = Int64(Date().timeIntervalSince1970 * 1000)
-    let outputURL = documentsURL.appendingPathComponent("capture_\(timestamp).h265")
-
-    if !FileManager.default.createFile(atPath: outputURL.path, contents: nil) {
-      throw HevcDumperError.cannotCreateOutputFile
-    }
-
-    return outputURL
-  }
-
   private func teardownSessionState() {
     if captureSession.isRunning {
       captureSession.stopRunning()
@@ -271,44 +245,36 @@ final class HevcDumper: NSObject {
     }
 
     videoOutput.setSampleBufferDelegate(nil, queue: nil)
-
-    fileQueue.sync {
-      fileHandle?.closeFile()
-      fileHandle = nil
-    }
-
-    outputURL = nil
     isRecording = false
   }
 
   private func handleEncodedSampleBuffer(_ sampleBuffer: CMSampleBuffer) {
     guard CMSampleBufferDataIsReady(sampleBuffer) else { return }
 
-    fileQueue.sync {
-      do {
-        try ensureOutputFileHandle()
-        guard let fileHandle else { return }
+    let keyframe = isKeyFrame(sampleBuffer)
+    var annexBFrame = Data()
+    if keyframe {
+      appendParameterSets(sampleBuffer, to: &annexBFrame)
+    }
 
-        if isKeyFrame(sampleBuffer) {
-          writeParameterSets(sampleBuffer, to: fileHandle)
-        }
+    guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { return }
+    appendAnnexBNALUnits(from: blockBuffer, to: &annexBFrame)
 
-        guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { return }
-        writeAnnexBNALUnits(from: blockBuffer, to: fileHandle)
-      } catch {
-        NSLog("HevcDumper: failed writing sample buffer (\(error.localizedDescription))")
-      }
+    guard !annexBFrame.isEmpty else { return }
+    emitFrame(annexBFrame, isKeyframe: keyframe)
+  }
+
+  private func emitFrame(_ data: Data, isKeyframe: Bool) {
+    DispatchQueue.main.async { [weak self] in
+      guard let eventSink = self?.eventSink else { return }
+      eventSink([
+        "bytes": FlutterStandardTypedData(bytes: data),
+        "is_keyframe": isKeyframe,
+      ])
     }
   }
 
-  private func ensureOutputFileHandle() throws {
-    guard fileHandle == nil else { return }
-    guard let outputURL else { throw HevcDumperError.noOutputFileURL }
-
-    fileHandle = try FileHandle(forWritingTo: outputURL)
-  }
-
-  private func writeParameterSets(_ sampleBuffer: CMSampleBuffer, to fileHandle: FileHandle) {
+  private func appendParameterSets(_ sampleBuffer: CMSampleBuffer, to buffer: inout Data) {
     guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer) else { return }
 
     var nalUnitHeaderLength: Int32 = 0
@@ -327,12 +293,12 @@ final class HevcDumper: NSObject {
       )
 
       guard status == noErr, let parameterSetPointer else { continue }
-      fileHandle.write(Self.annexBStartCode)
-      fileHandle.write(Data(bytes: parameterSetPointer, count: parameterSetSize))
+      buffer.append(Self.annexBStartCode)
+      buffer.append(parameterSetPointer, count: parameterSetSize)
     }
   }
 
-  private func writeAnnexBNALUnits(from blockBuffer: CMBlockBuffer, to fileHandle: FileHandle) {
+  private func appendAnnexBNALUnits(from blockBuffer: CMBlockBuffer, to buffer: inout Data) {
     var lengthAtOffset = 0
     var totalLength = 0
     var dataPointer: UnsafeMutablePointer<Int8>?
@@ -358,8 +324,8 @@ final class HevcDumper: NSObject {
       let nalStart = bufferOffset + lengthFieldSize
       guard nalLength > 0, nalStart + nalLength <= totalLength else { break }
 
-      fileHandle.write(Self.annexBStartCode)
-      fileHandle.write(Data(bytes: dataPointer.advanced(by: nalStart), count: nalLength))
+      buffer.append(Self.annexBStartCode)
+      buffer.append(Data(bytes: dataPointer.advanced(by: nalStart), count: nalLength))
 
       bufferOffset = nalStart + nalLength
     }

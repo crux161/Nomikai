@@ -66,7 +66,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => -1694417665;
+  int get rustContentHash => 1582856611;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -79,20 +79,24 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
 abstract class RustLibApi extends BaseApi {
   Future<void> crateApiSimpleInitApp();
 
-  Stream<UiEvent> crateApiSimpleRecvFiles({
-    required String bindAddr,
-    required String outDir,
-    required String pskHex,
+  Future<void> crateApiSimplePushHevcFrame({
+    required List<int> frameBytes,
+    required bool isKeyframe,
   });
 
-  Stream<UiEvent> crateApiSimpleSendFiles({
-    required String dest,
-    required List<String> relayRoutes,
+  Stream<UiEvent> crateApiSimpleStartSankakuReceiver({
+    required String bindAddr,
     required String pskHex,
-    required List<String> filePaths,
-    required double redundancy,
-    required BigInt maxBytesPerSec,
+    required List<int> graphBytes,
   });
+
+  Stream<UiEvent> crateApiSimpleStartSankakuSender({
+    required String dest,
+    required String pskHex,
+    required List<int> graphBytes,
+  });
+
+  Future<void> crateApiSimpleStopSankakuSender();
 }
 
 class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
@@ -131,10 +135,45 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "init_app", argNames: []);
 
   @override
-  Stream<UiEvent> crateApiSimpleRecvFiles({
+  Future<void> crateApiSimplePushHevcFrame({
+    required List<int> frameBytes,
+    required bool isKeyframe,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_list_prim_u_8_loose(frameBytes, serializer);
+          sse_encode_bool(isKeyframe, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 2,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiSimplePushHevcFrameConstMeta,
+        argValues: [frameBytes, isKeyframe],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSimplePushHevcFrameConstMeta =>
+      const TaskConstMeta(
+        debugName: "push_hevc_frame",
+        argNames: ["frameBytes", "isKeyframe"],
+      );
+
+  @override
+  Stream<UiEvent> crateApiSimpleStartSankakuReceiver({
     required String bindAddr,
-    required String outDir,
     required String pskHex,
+    required List<int> graphBytes,
   }) {
     final sink = RustStreamSink<UiEvent>();
     unawaited(
@@ -144,55 +183,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             final serializer = SseSerializer(generalizedFrbRustBinding);
             sse_encode_StreamSink_ui_event_Sse(sink, serializer);
             sse_encode_String(bindAddr, serializer);
-            sse_encode_String(outDir, serializer);
             sse_encode_String(pskHex, serializer);
-            pdeCallFfi(
-              generalizedFrbRustBinding,
-              serializer,
-              funcId: 2,
-              port: port_,
-            );
-          },
-          codec: SseCodec(
-            decodeSuccessData: sse_decode_unit,
-            decodeErrorData: sse_decode_AnyhowException,
-          ),
-          constMeta: kCrateApiSimpleRecvFilesConstMeta,
-          argValues: [sink, bindAddr, outDir, pskHex],
-          apiImpl: this,
-        ),
-      ),
-    );
-    return sink.stream;
-  }
-
-  TaskConstMeta get kCrateApiSimpleRecvFilesConstMeta => const TaskConstMeta(
-    debugName: "recv_files",
-    argNames: ["sink", "bindAddr", "outDir", "pskHex"],
-  );
-
-  @override
-  Stream<UiEvent> crateApiSimpleSendFiles({
-    required String dest,
-    required List<String> relayRoutes,
-    required String pskHex,
-    required List<String> filePaths,
-    required double redundancy,
-    required BigInt maxBytesPerSec,
-  }) {
-    final sink = RustStreamSink<UiEvent>();
-    unawaited(
-      handler.executeNormal(
-        NormalTask(
-          callFfi: (port_) {
-            final serializer = SseSerializer(generalizedFrbRustBinding);
-            sse_encode_StreamSink_ui_event_Sse(sink, serializer);
-            sse_encode_String(dest, serializer);
-            sse_encode_list_String(relayRoutes, serializer);
-            sse_encode_String(pskHex, serializer);
-            sse_encode_list_String(filePaths, serializer);
-            sse_encode_f_32(redundancy, serializer);
-            sse_encode_u_64(maxBytesPerSec, serializer);
+            sse_encode_list_prim_u_8_loose(graphBytes, serializer);
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
@@ -204,16 +196,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             decodeSuccessData: sse_decode_unit,
             decodeErrorData: sse_decode_AnyhowException,
           ),
-          constMeta: kCrateApiSimpleSendFilesConstMeta,
-          argValues: [
-            sink,
-            dest,
-            relayRoutes,
-            pskHex,
-            filePaths,
-            redundancy,
-            maxBytesPerSec,
-          ],
+          constMeta: kCrateApiSimpleStartSankakuReceiverConstMeta,
+          argValues: [sink, bindAddr, pskHex, graphBytes],
           apiImpl: this,
         ),
       ),
@@ -221,18 +205,80 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     return sink.stream;
   }
 
-  TaskConstMeta get kCrateApiSimpleSendFilesConstMeta => const TaskConstMeta(
-    debugName: "send_files",
-    argNames: [
-      "sink",
-      "dest",
-      "relayRoutes",
-      "pskHex",
-      "filePaths",
-      "redundancy",
-      "maxBytesPerSec",
-    ],
-  );
+  TaskConstMeta get kCrateApiSimpleStartSankakuReceiverConstMeta =>
+      const TaskConstMeta(
+        debugName: "start_sankaku_receiver",
+        argNames: ["sink", "bindAddr", "pskHex", "graphBytes"],
+      );
+
+  @override
+  Stream<UiEvent> crateApiSimpleStartSankakuSender({
+    required String dest,
+    required String pskHex,
+    required List<int> graphBytes,
+  }) {
+    final sink = RustStreamSink<UiEvent>();
+    unawaited(
+      handler.executeNormal(
+        NormalTask(
+          callFfi: (port_) {
+            final serializer = SseSerializer(generalizedFrbRustBinding);
+            sse_encode_StreamSink_ui_event_Sse(sink, serializer);
+            sse_encode_String(dest, serializer);
+            sse_encode_String(pskHex, serializer);
+            sse_encode_list_prim_u_8_loose(graphBytes, serializer);
+            pdeCallFfi(
+              generalizedFrbRustBinding,
+              serializer,
+              funcId: 4,
+              port: port_,
+            );
+          },
+          codec: SseCodec(
+            decodeSuccessData: sse_decode_unit,
+            decodeErrorData: sse_decode_AnyhowException,
+          ),
+          constMeta: kCrateApiSimpleStartSankakuSenderConstMeta,
+          argValues: [sink, dest, pskHex, graphBytes],
+          apiImpl: this,
+        ),
+      ),
+    );
+    return sink.stream;
+  }
+
+  TaskConstMeta get kCrateApiSimpleStartSankakuSenderConstMeta =>
+      const TaskConstMeta(
+        debugName: "start_sankaku_sender",
+        argNames: ["sink", "dest", "pskHex", "graphBytes"],
+      );
+
+  @override
+  Future<void> crateApiSimpleStopSankakuSender() {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 5,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiSimpleStopSankakuSenderConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSimpleStopSankakuSenderConstMeta =>
+      const TaskConstMeta(debugName: "stop_sankaku_sender", argNames: []);
 
   @protected
   AnyhowException dco_decode_AnyhowException(dynamic raw) {
@@ -253,15 +299,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  double dco_decode_f_32(dynamic raw) {
+  bool dco_decode_bool(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
-    return raw as double;
+    return raw as bool;
   }
 
   @protected
-  List<String> dco_decode_list_String(dynamic raw) {
+  List<int> dco_decode_list_prim_u_8_loose(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
-    return (raw as List<dynamic>).map(dco_decode_String).toList();
+    return raw as List<int>;
   }
 
   @protected
@@ -295,33 +341,33 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       case 0:
         return UiEvent_Log(msg: dco_decode_String(raw[1]));
       case 1:
-        return UiEvent_HandshakeInitiated();
+        return UiEvent_ConnectionState(
+          state: dco_decode_String(raw[1]),
+          detail: dco_decode_String(raw[2]),
+        );
       case 2:
-        return UiEvent_HandshakeComplete();
+        return UiEvent_HandshakeInitiated();
       case 3:
-        return UiEvent_FileDetected(
-          streamId: dco_decode_u_32(raw[1]),
-          traceId: dco_decode_u_64(raw[2]),
-          name: dco_decode_String(raw[3]),
-          size: dco_decode_u_64(raw[4]),
+        return UiEvent_HandshakeComplete(
+          sessionId: dco_decode_u_64(raw[1]),
+          bootstrapMode: dco_decode_String(raw[2]),
         );
       case 4:
         return UiEvent_Progress(
           streamId: dco_decode_u_32(raw[1]),
-          traceId: dco_decode_u_64(raw[2]),
-          current: dco_decode_u_64(raw[3]),
-          total: dco_decode_u_64(raw[4]),
+          frameIndex: dco_decode_u_64(raw[2]),
+          bytes: dco_decode_u_64(raw[3]),
+          frames: dco_decode_u_64(raw[4]),
         );
       case 5:
-        return UiEvent_TransferComplete(
-          streamId: dco_decode_u_32(raw[1]),
-          traceId: dco_decode_u_64(raw[2]),
-          path: dco_decode_String(raw[3]),
+        return UiEvent_Telemetry(
+          name: dco_decode_String(raw[1]),
+          value: dco_decode_u_64(raw[2]),
         );
       case 6:
-        return UiEvent_EarlyTermination(
+        return UiEvent_FrameDrop(
           streamId: dco_decode_u_32(raw[1]),
-          traceId: dco_decode_u_64(raw[2]),
+          reason: dco_decode_String(raw[2]),
         );
       case 7:
         return UiEvent_Fault(
@@ -329,9 +375,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           message: dco_decode_String(raw[2]),
         );
       case 8:
-        return UiEvent_Metric(
-          name: dco_decode_String(raw[1]),
-          value: dco_decode_u_64(raw[2]),
+        return UiEvent_VideoFrameReceived(
+          data: dco_decode_list_prim_u_8_strict(raw[1]),
         );
       case 9:
         return UiEvent_Error(msg: dco_decode_String(raw[1]));
@@ -369,21 +414,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  double sse_decode_f_32(SseDeserializer deserializer) {
+  bool sse_decode_bool(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    return deserializer.buffer.getFloat32();
+    return deserializer.buffer.getUint8() != 0;
   }
 
   @protected
-  List<String> sse_decode_list_String(SseDeserializer deserializer) {
+  List<int> sse_decode_list_prim_u_8_loose(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-
     var len_ = sse_decode_i_32(deserializer);
-    var ans_ = <String>[];
-    for (var idx_ = 0; idx_ < len_; ++idx_) {
-      ans_.add(sse_decode_String(deserializer));
-    }
-    return ans_;
+    return deserializer.buffer.getUint8List(len_);
   }
 
   @protected
@@ -421,55 +461,44 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         var var_msg = sse_decode_String(deserializer);
         return UiEvent_Log(msg: var_msg);
       case 1:
-        return UiEvent_HandshakeInitiated();
+        var var_state = sse_decode_String(deserializer);
+        var var_detail = sse_decode_String(deserializer);
+        return UiEvent_ConnectionState(state: var_state, detail: var_detail);
       case 2:
-        return UiEvent_HandshakeComplete();
+        return UiEvent_HandshakeInitiated();
       case 3:
-        var var_streamId = sse_decode_u_32(deserializer);
-        var var_traceId = sse_decode_u_64(deserializer);
-        var var_name = sse_decode_String(deserializer);
-        var var_size = sse_decode_u_64(deserializer);
-        return UiEvent_FileDetected(
-          streamId: var_streamId,
-          traceId: var_traceId,
-          name: var_name,
-          size: var_size,
+        var var_sessionId = sse_decode_u_64(deserializer);
+        var var_bootstrapMode = sse_decode_String(deserializer);
+        return UiEvent_HandshakeComplete(
+          sessionId: var_sessionId,
+          bootstrapMode: var_bootstrapMode,
         );
       case 4:
         var var_streamId = sse_decode_u_32(deserializer);
-        var var_traceId = sse_decode_u_64(deserializer);
-        var var_current = sse_decode_u_64(deserializer);
-        var var_total = sse_decode_u_64(deserializer);
+        var var_frameIndex = sse_decode_u_64(deserializer);
+        var var_bytes = sse_decode_u_64(deserializer);
+        var var_frames = sse_decode_u_64(deserializer);
         return UiEvent_Progress(
           streamId: var_streamId,
-          traceId: var_traceId,
-          current: var_current,
-          total: var_total,
+          frameIndex: var_frameIndex,
+          bytes: var_bytes,
+          frames: var_frames,
         );
       case 5:
-        var var_streamId = sse_decode_u_32(deserializer);
-        var var_traceId = sse_decode_u_64(deserializer);
-        var var_path = sse_decode_String(deserializer);
-        return UiEvent_TransferComplete(
-          streamId: var_streamId,
-          traceId: var_traceId,
-          path: var_path,
-        );
+        var var_name = sse_decode_String(deserializer);
+        var var_value = sse_decode_u_64(deserializer);
+        return UiEvent_Telemetry(name: var_name, value: var_value);
       case 6:
         var var_streamId = sse_decode_u_32(deserializer);
-        var var_traceId = sse_decode_u_64(deserializer);
-        return UiEvent_EarlyTermination(
-          streamId: var_streamId,
-          traceId: var_traceId,
-        );
+        var var_reason = sse_decode_String(deserializer);
+        return UiEvent_FrameDrop(streamId: var_streamId, reason: var_reason);
       case 7:
         var var_code = sse_decode_String(deserializer);
         var var_message = sse_decode_String(deserializer);
         return UiEvent_Fault(code: var_code, message: var_message);
       case 8:
-        var var_name = sse_decode_String(deserializer);
-        var var_value = sse_decode_u_64(deserializer);
-        return UiEvent_Metric(name: var_name, value: var_value);
+        var var_data = sse_decode_list_prim_u_8_strict(deserializer);
+        return UiEvent_VideoFrameReceived(data: var_data);
       case 9:
         var var_msg = sse_decode_String(deserializer);
         return UiEvent_Error(msg: var_msg);
@@ -487,12 +516,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   int sse_decode_i_32(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getInt32();
-  }
-
-  @protected
-  bool sse_decode_bool(SseDeserializer deserializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    return deserializer.buffer.getUint8() != 0;
   }
 
   @protected
@@ -528,18 +551,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_f_32(double self, SseSerializer serializer) {
+  void sse_encode_bool(bool self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    serializer.buffer.putFloat32(self);
+    serializer.buffer.putUint8(self ? 1 : 0);
   }
 
   @protected
-  void sse_encode_list_String(List<String> self, SseSerializer serializer) {
+  void sse_encode_list_prim_u_8_loose(
+    List<int> self,
+    SseSerializer serializer,
+  ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
-    for (final item in self) {
-      sse_encode_String(item, serializer);
-    }
+    serializer.buffer.putUint8List(
+      self is Uint8List ? self : Uint8List.fromList(self),
+    );
   }
 
   @protected
@@ -577,56 +603,45 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       case UiEvent_Log(msg: final msg):
         sse_encode_i_32(0, serializer);
         sse_encode_String(msg, serializer);
-      case UiEvent_HandshakeInitiated():
+      case UiEvent_ConnectionState(state: final state, detail: final detail):
         sse_encode_i_32(1, serializer);
-      case UiEvent_HandshakeComplete():
+        sse_encode_String(state, serializer);
+        sse_encode_String(detail, serializer);
+      case UiEvent_HandshakeInitiated():
         sse_encode_i_32(2, serializer);
-      case UiEvent_FileDetected(
-        streamId: final streamId,
-        traceId: final traceId,
-        name: final name,
-        size: final size,
+      case UiEvent_HandshakeComplete(
+        sessionId: final sessionId,
+        bootstrapMode: final bootstrapMode,
       ):
         sse_encode_i_32(3, serializer);
-        sse_encode_u_32(streamId, serializer);
-        sse_encode_u_64(traceId, serializer);
-        sse_encode_String(name, serializer);
-        sse_encode_u_64(size, serializer);
+        sse_encode_u_64(sessionId, serializer);
+        sse_encode_String(bootstrapMode, serializer);
       case UiEvent_Progress(
         streamId: final streamId,
-        traceId: final traceId,
-        current: final current,
-        total: final total,
+        frameIndex: final frameIndex,
+        bytes: final bytes,
+        frames: final frames,
       ):
         sse_encode_i_32(4, serializer);
         sse_encode_u_32(streamId, serializer);
-        sse_encode_u_64(traceId, serializer);
-        sse_encode_u_64(current, serializer);
-        sse_encode_u_64(total, serializer);
-      case UiEvent_TransferComplete(
-        streamId: final streamId,
-        traceId: final traceId,
-        path: final path,
-      ):
+        sse_encode_u_64(frameIndex, serializer);
+        sse_encode_u_64(bytes, serializer);
+        sse_encode_u_64(frames, serializer);
+      case UiEvent_Telemetry(name: final name, value: final value):
         sse_encode_i_32(5, serializer);
-        sse_encode_u_32(streamId, serializer);
-        sse_encode_u_64(traceId, serializer);
-        sse_encode_String(path, serializer);
-      case UiEvent_EarlyTermination(
-        streamId: final streamId,
-        traceId: final traceId,
-      ):
+        sse_encode_String(name, serializer);
+        sse_encode_u_64(value, serializer);
+      case UiEvent_FrameDrop(streamId: final streamId, reason: final reason):
         sse_encode_i_32(6, serializer);
         sse_encode_u_32(streamId, serializer);
-        sse_encode_u_64(traceId, serializer);
+        sse_encode_String(reason, serializer);
       case UiEvent_Fault(code: final code, message: final message):
         sse_encode_i_32(7, serializer);
         sse_encode_String(code, serializer);
         sse_encode_String(message, serializer);
-      case UiEvent_Metric(name: final name, value: final value):
+      case UiEvent_VideoFrameReceived(data: final data):
         sse_encode_i_32(8, serializer);
-        sse_encode_String(name, serializer);
-        sse_encode_u_64(value, serializer);
+        sse_encode_list_prim_u_8_strict(data, serializer);
       case UiEvent_Error(msg: final msg):
         sse_encode_i_32(9, serializer);
         sse_encode_String(msg, serializer);
@@ -642,11 +657,5 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   void sse_encode_i_32(int self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putInt32(self);
-  }
-
-  @protected
-  void sse_encode_bool(bool self, SseSerializer serializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    serializer.buffer.putUint8(self ? 1 : 0);
   }
 }

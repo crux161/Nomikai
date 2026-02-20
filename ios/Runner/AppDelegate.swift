@@ -3,19 +3,25 @@ import UIKit
 
 @main
 @objc class AppDelegate: FlutterAppDelegate {
-  private var hevcDumper: HevcDumper?
+  private let hevcDumper = HevcDumper()
 
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
     if let flutterViewController = window?.rootViewController as? FlutterViewController {
-      let channel = FlutterMethodChannel(
+      let methodChannel = FlutterMethodChannel(
         name: "com.nomikai.sankaku/hevc_dumper",
         binaryMessenger: flutterViewController.binaryMessenger
       )
+      let eventChannel = FlutterEventChannel(
+        name: "com.nomikai.sankaku/hevc_stream",
+        binaryMessenger: flutterViewController.binaryMessenger
+      )
 
-      channel.setMethodCallHandler { [weak self] call, result in
+      eventChannel.setStreamHandler(hevcDumper)
+
+      methodChannel.setMethodCallHandler { [weak self] call, result in
         guard let self else {
           result(
             FlutterError(
@@ -29,7 +35,7 @@ import UIKit
 
         switch call.method {
         case "startRecording":
-          if self.hevcDumper?.isRecording == true {
+          if self.hevcDumper.isRecording {
             result(
               FlutterError(
                 code: "ALREADY_RECORDING",
@@ -40,11 +46,8 @@ import UIKit
             return
           }
 
-          let dumper = HevcDumper()
-          self.hevcDumper = dumper
-          dumper.startRecording { error in
+          self.hevcDumper.startRecording { error in
             if let error {
-              self.hevcDumper = nil
               result(
                 FlutterError(
                   code: "START_FAILED",
@@ -58,7 +61,7 @@ import UIKit
           }
 
         case "stopRecording":
-          guard let dumper = self.hevcDumper else {
+          if !self.hevcDumper.isRecording {
             result(
               FlutterError(
                 code: "NOT_RECORDING",
@@ -69,9 +72,7 @@ import UIKit
             return
           }
 
-          dumper.stopRecording { path, error in
-            self.hevcDumper = nil
-
+          self.hevcDumper.stopRecording { error in
             if let error {
               result(
                 FlutterError(
@@ -83,7 +84,7 @@ import UIKit
               return
             }
 
-            result(path)
+            result(nil)
           }
 
         default:

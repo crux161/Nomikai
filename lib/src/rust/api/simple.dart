@@ -8,34 +8,41 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'simple.freezed.dart';
 
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `from`
+// These functions are ignored because they are not marked as `pub`: `clear_hevc_frame_tx`, `hevc_frame_tx_slot`, `install_hevc_frame_tx`, `run_receiver_loop`, `run_sender_loop`, `send_sender_frame`, `sink_event`, `unix_us_now`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `FrameIngressGuard`, `SenderRunGuard`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `drop`, `drop`, `from`
 
-/// Asynchronous function that runs the Kyu2 sender engine and streams events back to Dart
-Stream<UiEvent> sendFiles({
-  required String dest,
-  required List<String> relayRoutes,
-  required String pskHex,
-  required List<String> filePaths,
-  required double redundancy,
-  required BigInt maxBytesPerSec,
-}) => RustLib.instance.api.crateApiSimpleSendFiles(
-  dest: dest,
-  relayRoutes: relayRoutes,
-  pskHex: pskHex,
-  filePaths: filePaths,
-  redundancy: redundancy,
-  maxBytesPerSec: maxBytesPerSec,
+Future<void> pushHevcFrame({
+  required List<int> frameBytes,
+  required bool isKeyframe,
+}) => RustLib.instance.api.crateApiSimplePushHevcFrame(
+  frameBytes: frameBytes,
+  isKeyframe: isKeyframe,
 );
 
-/// Asynchronous function that runs the Kyu2 receiver engine and streams events back to Dart
-Stream<UiEvent> recvFiles({
-  required String bindAddr,
-  required String outDir,
+Future<void> stopSankakuSender() =>
+    RustLib.instance.api.crateApiSimpleStopSankakuSender();
+
+/// Starts an async Sankaku sender loop and streams transport state/events to Dart.
+Stream<UiEvent> startSankakuSender({
+  required String dest,
   required String pskHex,
-}) => RustLib.instance.api.crateApiSimpleRecvFiles(
-  bindAddr: bindAddr,
-  outDir: outDir,
+  required List<int> graphBytes,
+}) => RustLib.instance.api.crateApiSimpleStartSankakuSender(
+  dest: dest,
   pskHex: pskHex,
+  graphBytes: graphBytes,
+);
+
+/// Starts an async Sankaku receiver loop and streams transport state/events to Dart.
+Stream<UiEvent> startSankakuReceiver({
+  required String bindAddr,
+  required String pskHex,
+  required List<int> graphBytes,
+}) => RustLib.instance.api.crateApiSimpleStartSankakuReceiver(
+  bindAddr: bindAddr,
+  pskHex: pskHex,
+  graphBytes: graphBytes,
 );
 
 @freezed
@@ -43,32 +50,32 @@ sealed class UiEvent with _$UiEvent {
   const UiEvent._();
 
   const factory UiEvent.log({required String msg}) = UiEvent_Log;
+  const factory UiEvent.connectionState({
+    required String state,
+    required String detail,
+  }) = UiEvent_ConnectionState;
   const factory UiEvent.handshakeInitiated() = UiEvent_HandshakeInitiated;
-  const factory UiEvent.handshakeComplete() = UiEvent_HandshakeComplete;
-  const factory UiEvent.fileDetected({
-    required int streamId,
-    required BigInt traceId,
-    required String name,
-    required BigInt size,
-  }) = UiEvent_FileDetected;
+  const factory UiEvent.handshakeComplete({
+    required BigInt sessionId,
+    required String bootstrapMode,
+  }) = UiEvent_HandshakeComplete;
   const factory UiEvent.progress({
     required int streamId,
-    required BigInt traceId,
-    required BigInt current,
-    required BigInt total,
+    required BigInt frameIndex,
+    required BigInt bytes,
+    required BigInt frames,
   }) = UiEvent_Progress;
-  const factory UiEvent.transferComplete({
+  const factory UiEvent.telemetry({
+    required String name,
+    required BigInt value,
+  }) = UiEvent_Telemetry;
+  const factory UiEvent.frameDrop({
     required int streamId,
-    required BigInt traceId,
-    required String path,
-  }) = UiEvent_TransferComplete;
-  const factory UiEvent.earlyTermination({
-    required int streamId,
-    required BigInt traceId,
-  }) = UiEvent_EarlyTermination;
+    required String reason,
+  }) = UiEvent_FrameDrop;
   const factory UiEvent.fault({required String code, required String message}) =
       UiEvent_Fault;
-  const factory UiEvent.metric({required String name, required BigInt value}) =
-      UiEvent_Metric;
+  const factory UiEvent.videoFrameReceived({required Uint8List data}) =
+      UiEvent_VideoFrameReceived;
   const factory UiEvent.error({required String msg}) = UiEvent_Error;
 }

@@ -55,19 +55,19 @@ extension UiEventPatterns on UiEvent {
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( UiEvent_Log value)?  log,TResult Function( UiEvent_HandshakeInitiated value)?  handshakeInitiated,TResult Function( UiEvent_HandshakeComplete value)?  handshakeComplete,TResult Function( UiEvent_FileDetected value)?  fileDetected,TResult Function( UiEvent_Progress value)?  progress,TResult Function( UiEvent_TransferComplete value)?  transferComplete,TResult Function( UiEvent_EarlyTermination value)?  earlyTermination,TResult Function( UiEvent_Fault value)?  fault,TResult Function( UiEvent_Metric value)?  metric,TResult Function( UiEvent_Error value)?  error,required TResult orElse(),}){
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( UiEvent_Log value)?  log,TResult Function( UiEvent_ConnectionState value)?  connectionState,TResult Function( UiEvent_HandshakeInitiated value)?  handshakeInitiated,TResult Function( UiEvent_HandshakeComplete value)?  handshakeComplete,TResult Function( UiEvent_Progress value)?  progress,TResult Function( UiEvent_Telemetry value)?  telemetry,TResult Function( UiEvent_FrameDrop value)?  frameDrop,TResult Function( UiEvent_Fault value)?  fault,TResult Function( UiEvent_VideoFrameReceived value)?  videoFrameReceived,TResult Function( UiEvent_Error value)?  error,required TResult orElse(),}){
 final _that = this;
 switch (_that) {
 case UiEvent_Log() when log != null:
-return log(_that);case UiEvent_HandshakeInitiated() when handshakeInitiated != null:
+return log(_that);case UiEvent_ConnectionState() when connectionState != null:
+return connectionState(_that);case UiEvent_HandshakeInitiated() when handshakeInitiated != null:
 return handshakeInitiated(_that);case UiEvent_HandshakeComplete() when handshakeComplete != null:
-return handshakeComplete(_that);case UiEvent_FileDetected() when fileDetected != null:
-return fileDetected(_that);case UiEvent_Progress() when progress != null:
-return progress(_that);case UiEvent_TransferComplete() when transferComplete != null:
-return transferComplete(_that);case UiEvent_EarlyTermination() when earlyTermination != null:
-return earlyTermination(_that);case UiEvent_Fault() when fault != null:
-return fault(_that);case UiEvent_Metric() when metric != null:
-return metric(_that);case UiEvent_Error() when error != null:
+return handshakeComplete(_that);case UiEvent_Progress() when progress != null:
+return progress(_that);case UiEvent_Telemetry() when telemetry != null:
+return telemetry(_that);case UiEvent_FrameDrop() when frameDrop != null:
+return frameDrop(_that);case UiEvent_Fault() when fault != null:
+return fault(_that);case UiEvent_VideoFrameReceived() when videoFrameReceived != null:
+return videoFrameReceived(_that);case UiEvent_Error() when error != null:
 return error(_that);case _:
   return orElse();
 
@@ -86,19 +86,19 @@ return error(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( UiEvent_Log value)  log,required TResult Function( UiEvent_HandshakeInitiated value)  handshakeInitiated,required TResult Function( UiEvent_HandshakeComplete value)  handshakeComplete,required TResult Function( UiEvent_FileDetected value)  fileDetected,required TResult Function( UiEvent_Progress value)  progress,required TResult Function( UiEvent_TransferComplete value)  transferComplete,required TResult Function( UiEvent_EarlyTermination value)  earlyTermination,required TResult Function( UiEvent_Fault value)  fault,required TResult Function( UiEvent_Metric value)  metric,required TResult Function( UiEvent_Error value)  error,}){
+@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( UiEvent_Log value)  log,required TResult Function( UiEvent_ConnectionState value)  connectionState,required TResult Function( UiEvent_HandshakeInitiated value)  handshakeInitiated,required TResult Function( UiEvent_HandshakeComplete value)  handshakeComplete,required TResult Function( UiEvent_Progress value)  progress,required TResult Function( UiEvent_Telemetry value)  telemetry,required TResult Function( UiEvent_FrameDrop value)  frameDrop,required TResult Function( UiEvent_Fault value)  fault,required TResult Function( UiEvent_VideoFrameReceived value)  videoFrameReceived,required TResult Function( UiEvent_Error value)  error,}){
 final _that = this;
 switch (_that) {
 case UiEvent_Log():
-return log(_that);case UiEvent_HandshakeInitiated():
+return log(_that);case UiEvent_ConnectionState():
+return connectionState(_that);case UiEvent_HandshakeInitiated():
 return handshakeInitiated(_that);case UiEvent_HandshakeComplete():
-return handshakeComplete(_that);case UiEvent_FileDetected():
-return fileDetected(_that);case UiEvent_Progress():
-return progress(_that);case UiEvent_TransferComplete():
-return transferComplete(_that);case UiEvent_EarlyTermination():
-return earlyTermination(_that);case UiEvent_Fault():
-return fault(_that);case UiEvent_Metric():
-return metric(_that);case UiEvent_Error():
+return handshakeComplete(_that);case UiEvent_Progress():
+return progress(_that);case UiEvent_Telemetry():
+return telemetry(_that);case UiEvent_FrameDrop():
+return frameDrop(_that);case UiEvent_Fault():
+return fault(_that);case UiEvent_VideoFrameReceived():
+return videoFrameReceived(_that);case UiEvent_Error():
 return error(_that);}
 }
 /// A variant of `map` that fallback to returning `null`.
@@ -113,19 +113,19 @@ return error(_that);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( UiEvent_Log value)?  log,TResult? Function( UiEvent_HandshakeInitiated value)?  handshakeInitiated,TResult? Function( UiEvent_HandshakeComplete value)?  handshakeComplete,TResult? Function( UiEvent_FileDetected value)?  fileDetected,TResult? Function( UiEvent_Progress value)?  progress,TResult? Function( UiEvent_TransferComplete value)?  transferComplete,TResult? Function( UiEvent_EarlyTermination value)?  earlyTermination,TResult? Function( UiEvent_Fault value)?  fault,TResult? Function( UiEvent_Metric value)?  metric,TResult? Function( UiEvent_Error value)?  error,}){
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( UiEvent_Log value)?  log,TResult? Function( UiEvent_ConnectionState value)?  connectionState,TResult? Function( UiEvent_HandshakeInitiated value)?  handshakeInitiated,TResult? Function( UiEvent_HandshakeComplete value)?  handshakeComplete,TResult? Function( UiEvent_Progress value)?  progress,TResult? Function( UiEvent_Telemetry value)?  telemetry,TResult? Function( UiEvent_FrameDrop value)?  frameDrop,TResult? Function( UiEvent_Fault value)?  fault,TResult? Function( UiEvent_VideoFrameReceived value)?  videoFrameReceived,TResult? Function( UiEvent_Error value)?  error,}){
 final _that = this;
 switch (_that) {
 case UiEvent_Log() when log != null:
-return log(_that);case UiEvent_HandshakeInitiated() when handshakeInitiated != null:
+return log(_that);case UiEvent_ConnectionState() when connectionState != null:
+return connectionState(_that);case UiEvent_HandshakeInitiated() when handshakeInitiated != null:
 return handshakeInitiated(_that);case UiEvent_HandshakeComplete() when handshakeComplete != null:
-return handshakeComplete(_that);case UiEvent_FileDetected() when fileDetected != null:
-return fileDetected(_that);case UiEvent_Progress() when progress != null:
-return progress(_that);case UiEvent_TransferComplete() when transferComplete != null:
-return transferComplete(_that);case UiEvent_EarlyTermination() when earlyTermination != null:
-return earlyTermination(_that);case UiEvent_Fault() when fault != null:
-return fault(_that);case UiEvent_Metric() when metric != null:
-return metric(_that);case UiEvent_Error() when error != null:
+return handshakeComplete(_that);case UiEvent_Progress() when progress != null:
+return progress(_that);case UiEvent_Telemetry() when telemetry != null:
+return telemetry(_that);case UiEvent_FrameDrop() when frameDrop != null:
+return frameDrop(_that);case UiEvent_Fault() when fault != null:
+return fault(_that);case UiEvent_VideoFrameReceived() when videoFrameReceived != null:
+return videoFrameReceived(_that);case UiEvent_Error() when error != null:
 return error(_that);case _:
   return null;
 
@@ -143,18 +143,18 @@ return error(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String msg)?  log,TResult Function()?  handshakeInitiated,TResult Function()?  handshakeComplete,TResult Function( int streamId,  BigInt traceId,  String name,  BigInt size)?  fileDetected,TResult Function( int streamId,  BigInt traceId,  BigInt current,  BigInt total)?  progress,TResult Function( int streamId,  BigInt traceId,  String path)?  transferComplete,TResult Function( int streamId,  BigInt traceId)?  earlyTermination,TResult Function( String code,  String message)?  fault,TResult Function( String name,  BigInt value)?  metric,TResult Function( String msg)?  error,required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String msg)?  log,TResult Function( String state,  String detail)?  connectionState,TResult Function()?  handshakeInitiated,TResult Function( BigInt sessionId,  String bootstrapMode)?  handshakeComplete,TResult Function( int streamId,  BigInt frameIndex,  BigInt bytes,  BigInt frames)?  progress,TResult Function( String name,  BigInt value)?  telemetry,TResult Function( int streamId,  String reason)?  frameDrop,TResult Function( String code,  String message)?  fault,TResult Function( Uint8List data)?  videoFrameReceived,TResult Function( String msg)?  error,required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case UiEvent_Log() when log != null:
-return log(_that.msg);case UiEvent_HandshakeInitiated() when handshakeInitiated != null:
+return log(_that.msg);case UiEvent_ConnectionState() when connectionState != null:
+return connectionState(_that.state,_that.detail);case UiEvent_HandshakeInitiated() when handshakeInitiated != null:
 return handshakeInitiated();case UiEvent_HandshakeComplete() when handshakeComplete != null:
-return handshakeComplete();case UiEvent_FileDetected() when fileDetected != null:
-return fileDetected(_that.streamId,_that.traceId,_that.name,_that.size);case UiEvent_Progress() when progress != null:
-return progress(_that.streamId,_that.traceId,_that.current,_that.total);case UiEvent_TransferComplete() when transferComplete != null:
-return transferComplete(_that.streamId,_that.traceId,_that.path);case UiEvent_EarlyTermination() when earlyTermination != null:
-return earlyTermination(_that.streamId,_that.traceId);case UiEvent_Fault() when fault != null:
-return fault(_that.code,_that.message);case UiEvent_Metric() when metric != null:
-return metric(_that.name,_that.value);case UiEvent_Error() when error != null:
+return handshakeComplete(_that.sessionId,_that.bootstrapMode);case UiEvent_Progress() when progress != null:
+return progress(_that.streamId,_that.frameIndex,_that.bytes,_that.frames);case UiEvent_Telemetry() when telemetry != null:
+return telemetry(_that.name,_that.value);case UiEvent_FrameDrop() when frameDrop != null:
+return frameDrop(_that.streamId,_that.reason);case UiEvent_Fault() when fault != null:
+return fault(_that.code,_that.message);case UiEvent_VideoFrameReceived() when videoFrameReceived != null:
+return videoFrameReceived(_that.data);case UiEvent_Error() when error != null:
 return error(_that.msg);case _:
   return orElse();
 
@@ -173,18 +173,18 @@ return error(_that.msg);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String msg)  log,required TResult Function()  handshakeInitiated,required TResult Function()  handshakeComplete,required TResult Function( int streamId,  BigInt traceId,  String name,  BigInt size)  fileDetected,required TResult Function( int streamId,  BigInt traceId,  BigInt current,  BigInt total)  progress,required TResult Function( int streamId,  BigInt traceId,  String path)  transferComplete,required TResult Function( int streamId,  BigInt traceId)  earlyTermination,required TResult Function( String code,  String message)  fault,required TResult Function( String name,  BigInt value)  metric,required TResult Function( String msg)  error,}) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String msg)  log,required TResult Function( String state,  String detail)  connectionState,required TResult Function()  handshakeInitiated,required TResult Function( BigInt sessionId,  String bootstrapMode)  handshakeComplete,required TResult Function( int streamId,  BigInt frameIndex,  BigInt bytes,  BigInt frames)  progress,required TResult Function( String name,  BigInt value)  telemetry,required TResult Function( int streamId,  String reason)  frameDrop,required TResult Function( String code,  String message)  fault,required TResult Function( Uint8List data)  videoFrameReceived,required TResult Function( String msg)  error,}) {final _that = this;
 switch (_that) {
 case UiEvent_Log():
-return log(_that.msg);case UiEvent_HandshakeInitiated():
+return log(_that.msg);case UiEvent_ConnectionState():
+return connectionState(_that.state,_that.detail);case UiEvent_HandshakeInitiated():
 return handshakeInitiated();case UiEvent_HandshakeComplete():
-return handshakeComplete();case UiEvent_FileDetected():
-return fileDetected(_that.streamId,_that.traceId,_that.name,_that.size);case UiEvent_Progress():
-return progress(_that.streamId,_that.traceId,_that.current,_that.total);case UiEvent_TransferComplete():
-return transferComplete(_that.streamId,_that.traceId,_that.path);case UiEvent_EarlyTermination():
-return earlyTermination(_that.streamId,_that.traceId);case UiEvent_Fault():
-return fault(_that.code,_that.message);case UiEvent_Metric():
-return metric(_that.name,_that.value);case UiEvent_Error():
+return handshakeComplete(_that.sessionId,_that.bootstrapMode);case UiEvent_Progress():
+return progress(_that.streamId,_that.frameIndex,_that.bytes,_that.frames);case UiEvent_Telemetry():
+return telemetry(_that.name,_that.value);case UiEvent_FrameDrop():
+return frameDrop(_that.streamId,_that.reason);case UiEvent_Fault():
+return fault(_that.code,_that.message);case UiEvent_VideoFrameReceived():
+return videoFrameReceived(_that.data);case UiEvent_Error():
 return error(_that.msg);}
 }
 /// A variant of `when` that fallback to returning `null`
@@ -199,18 +199,18 @@ return error(_that.msg);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String msg)?  log,TResult? Function()?  handshakeInitiated,TResult? Function()?  handshakeComplete,TResult? Function( int streamId,  BigInt traceId,  String name,  BigInt size)?  fileDetected,TResult? Function( int streamId,  BigInt traceId,  BigInt current,  BigInt total)?  progress,TResult? Function( int streamId,  BigInt traceId,  String path)?  transferComplete,TResult? Function( int streamId,  BigInt traceId)?  earlyTermination,TResult? Function( String code,  String message)?  fault,TResult? Function( String name,  BigInt value)?  metric,TResult? Function( String msg)?  error,}) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String msg)?  log,TResult? Function( String state,  String detail)?  connectionState,TResult? Function()?  handshakeInitiated,TResult? Function( BigInt sessionId,  String bootstrapMode)?  handshakeComplete,TResult? Function( int streamId,  BigInt frameIndex,  BigInt bytes,  BigInt frames)?  progress,TResult? Function( String name,  BigInt value)?  telemetry,TResult? Function( int streamId,  String reason)?  frameDrop,TResult? Function( String code,  String message)?  fault,TResult? Function( Uint8List data)?  videoFrameReceived,TResult? Function( String msg)?  error,}) {final _that = this;
 switch (_that) {
 case UiEvent_Log() when log != null:
-return log(_that.msg);case UiEvent_HandshakeInitiated() when handshakeInitiated != null:
+return log(_that.msg);case UiEvent_ConnectionState() when connectionState != null:
+return connectionState(_that.state,_that.detail);case UiEvent_HandshakeInitiated() when handshakeInitiated != null:
 return handshakeInitiated();case UiEvent_HandshakeComplete() when handshakeComplete != null:
-return handshakeComplete();case UiEvent_FileDetected() when fileDetected != null:
-return fileDetected(_that.streamId,_that.traceId,_that.name,_that.size);case UiEvent_Progress() when progress != null:
-return progress(_that.streamId,_that.traceId,_that.current,_that.total);case UiEvent_TransferComplete() when transferComplete != null:
-return transferComplete(_that.streamId,_that.traceId,_that.path);case UiEvent_EarlyTermination() when earlyTermination != null:
-return earlyTermination(_that.streamId,_that.traceId);case UiEvent_Fault() when fault != null:
-return fault(_that.code,_that.message);case UiEvent_Metric() when metric != null:
-return metric(_that.name,_that.value);case UiEvent_Error() when error != null:
+return handshakeComplete(_that.sessionId,_that.bootstrapMode);case UiEvent_Progress() when progress != null:
+return progress(_that.streamId,_that.frameIndex,_that.bytes,_that.frames);case UiEvent_Telemetry() when telemetry != null:
+return telemetry(_that.name,_that.value);case UiEvent_FrameDrop() when frameDrop != null:
+return frameDrop(_that.streamId,_that.reason);case UiEvent_Fault() when fault != null:
+return fault(_that.code,_that.message);case UiEvent_VideoFrameReceived() when videoFrameReceived != null:
+return videoFrameReceived(_that.data);case UiEvent_Error() when error != null:
 return error(_that.msg);case _:
   return null;
 
@@ -288,6 +288,74 @@ as String,
 /// @nodoc
 
 
+class UiEvent_ConnectionState extends UiEvent {
+  const UiEvent_ConnectionState({required this.state, required this.detail}): super._();
+  
+
+ final  String state;
+ final  String detail;
+
+/// Create a copy of UiEvent
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$UiEvent_ConnectionStateCopyWith<UiEvent_ConnectionState> get copyWith => _$UiEvent_ConnectionStateCopyWithImpl<UiEvent_ConnectionState>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is UiEvent_ConnectionState&&(identical(other.state, state) || other.state == state)&&(identical(other.detail, detail) || other.detail == detail));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,state,detail);
+
+@override
+String toString() {
+  return 'UiEvent.connectionState(state: $state, detail: $detail)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $UiEvent_ConnectionStateCopyWith<$Res> implements $UiEventCopyWith<$Res> {
+  factory $UiEvent_ConnectionStateCopyWith(UiEvent_ConnectionState value, $Res Function(UiEvent_ConnectionState) _then) = _$UiEvent_ConnectionStateCopyWithImpl;
+@useResult
+$Res call({
+ String state, String detail
+});
+
+
+
+
+}
+/// @nodoc
+class _$UiEvent_ConnectionStateCopyWithImpl<$Res>
+    implements $UiEvent_ConnectionStateCopyWith<$Res> {
+  _$UiEvent_ConnectionStateCopyWithImpl(this._self, this._then);
+
+  final UiEvent_ConnectionState _self;
+  final $Res Function(UiEvent_ConnectionState) _then;
+
+/// Create a copy of UiEvent
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? state = null,Object? detail = null,}) {
+  return _then(UiEvent_ConnectionState(
+state: null == state ? _self.state : state // ignore: cast_nullable_to_non_nullable
+as String,detail: null == detail ? _self.detail : detail // ignore: cast_nullable_to_non_nullable
+as String,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
 class UiEvent_HandshakeInitiated extends UiEvent {
   const UiEvent_HandshakeInitiated(): super._();
   
@@ -321,77 +389,43 @@ String toString() {
 
 
 class UiEvent_HandshakeComplete extends UiEvent {
-  const UiEvent_HandshakeComplete(): super._();
+  const UiEvent_HandshakeComplete({required this.sessionId, required this.bootstrapMode}): super._();
   
 
-
-
-
-
-
-@override
-bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is UiEvent_HandshakeComplete);
-}
-
-
-@override
-int get hashCode => runtimeType.hashCode;
-
-@override
-String toString() {
-  return 'UiEvent.handshakeComplete()';
-}
-
-
-}
-
-
-
-
-/// @nodoc
-
-
-class UiEvent_FileDetected extends UiEvent {
-  const UiEvent_FileDetected({required this.streamId, required this.traceId, required this.name, required this.size}): super._();
-  
-
- final  int streamId;
- final  BigInt traceId;
- final  String name;
- final  BigInt size;
+ final  BigInt sessionId;
+ final  String bootstrapMode;
 
 /// Create a copy of UiEvent
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
 @pragma('vm:prefer-inline')
-$UiEvent_FileDetectedCopyWith<UiEvent_FileDetected> get copyWith => _$UiEvent_FileDetectedCopyWithImpl<UiEvent_FileDetected>(this, _$identity);
+$UiEvent_HandshakeCompleteCopyWith<UiEvent_HandshakeComplete> get copyWith => _$UiEvent_HandshakeCompleteCopyWithImpl<UiEvent_HandshakeComplete>(this, _$identity);
 
 
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is UiEvent_FileDetected&&(identical(other.streamId, streamId) || other.streamId == streamId)&&(identical(other.traceId, traceId) || other.traceId == traceId)&&(identical(other.name, name) || other.name == name)&&(identical(other.size, size) || other.size == size));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is UiEvent_HandshakeComplete&&(identical(other.sessionId, sessionId) || other.sessionId == sessionId)&&(identical(other.bootstrapMode, bootstrapMode) || other.bootstrapMode == bootstrapMode));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,streamId,traceId,name,size);
+int get hashCode => Object.hash(runtimeType,sessionId,bootstrapMode);
 
 @override
 String toString() {
-  return 'UiEvent.fileDetected(streamId: $streamId, traceId: $traceId, name: $name, size: $size)';
+  return 'UiEvent.handshakeComplete(sessionId: $sessionId, bootstrapMode: $bootstrapMode)';
 }
 
 
 }
 
 /// @nodoc
-abstract mixin class $UiEvent_FileDetectedCopyWith<$Res> implements $UiEventCopyWith<$Res> {
-  factory $UiEvent_FileDetectedCopyWith(UiEvent_FileDetected value, $Res Function(UiEvent_FileDetected) _then) = _$UiEvent_FileDetectedCopyWithImpl;
+abstract mixin class $UiEvent_HandshakeCompleteCopyWith<$Res> implements $UiEventCopyWith<$Res> {
+  factory $UiEvent_HandshakeCompleteCopyWith(UiEvent_HandshakeComplete value, $Res Function(UiEvent_HandshakeComplete) _then) = _$UiEvent_HandshakeCompleteCopyWithImpl;
 @useResult
 $Res call({
- int streamId, BigInt traceId, String name, BigInt size
+ BigInt sessionId, String bootstrapMode
 });
 
 
@@ -399,22 +433,20 @@ $Res call({
 
 }
 /// @nodoc
-class _$UiEvent_FileDetectedCopyWithImpl<$Res>
-    implements $UiEvent_FileDetectedCopyWith<$Res> {
-  _$UiEvent_FileDetectedCopyWithImpl(this._self, this._then);
+class _$UiEvent_HandshakeCompleteCopyWithImpl<$Res>
+    implements $UiEvent_HandshakeCompleteCopyWith<$Res> {
+  _$UiEvent_HandshakeCompleteCopyWithImpl(this._self, this._then);
 
-  final UiEvent_FileDetected _self;
-  final $Res Function(UiEvent_FileDetected) _then;
+  final UiEvent_HandshakeComplete _self;
+  final $Res Function(UiEvent_HandshakeComplete) _then;
 
 /// Create a copy of UiEvent
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') $Res call({Object? streamId = null,Object? traceId = null,Object? name = null,Object? size = null,}) {
-  return _then(UiEvent_FileDetected(
-streamId: null == streamId ? _self.streamId : streamId // ignore: cast_nullable_to_non_nullable
-as int,traceId: null == traceId ? _self.traceId : traceId // ignore: cast_nullable_to_non_nullable
-as BigInt,name: null == name ? _self.name : name // ignore: cast_nullable_to_non_nullable
-as String,size: null == size ? _self.size : size // ignore: cast_nullable_to_non_nullable
-as BigInt,
+@pragma('vm:prefer-inline') $Res call({Object? sessionId = null,Object? bootstrapMode = null,}) {
+  return _then(UiEvent_HandshakeComplete(
+sessionId: null == sessionId ? _self.sessionId : sessionId // ignore: cast_nullable_to_non_nullable
+as BigInt,bootstrapMode: null == bootstrapMode ? _self.bootstrapMode : bootstrapMode // ignore: cast_nullable_to_non_nullable
+as String,
   ));
 }
 
@@ -425,13 +457,13 @@ as BigInt,
 
 
 class UiEvent_Progress extends UiEvent {
-  const UiEvent_Progress({required this.streamId, required this.traceId, required this.current, required this.total}): super._();
+  const UiEvent_Progress({required this.streamId, required this.frameIndex, required this.bytes, required this.frames}): super._();
   
 
  final  int streamId;
- final  BigInt traceId;
- final  BigInt current;
- final  BigInt total;
+ final  BigInt frameIndex;
+ final  BigInt bytes;
+ final  BigInt frames;
 
 /// Create a copy of UiEvent
 /// with the given fields replaced by the non-null parameter values.
@@ -443,16 +475,16 @@ $UiEvent_ProgressCopyWith<UiEvent_Progress> get copyWith => _$UiEvent_ProgressCo
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is UiEvent_Progress&&(identical(other.streamId, streamId) || other.streamId == streamId)&&(identical(other.traceId, traceId) || other.traceId == traceId)&&(identical(other.current, current) || other.current == current)&&(identical(other.total, total) || other.total == total));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is UiEvent_Progress&&(identical(other.streamId, streamId) || other.streamId == streamId)&&(identical(other.frameIndex, frameIndex) || other.frameIndex == frameIndex)&&(identical(other.bytes, bytes) || other.bytes == bytes)&&(identical(other.frames, frames) || other.frames == frames));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,streamId,traceId,current,total);
+int get hashCode => Object.hash(runtimeType,streamId,frameIndex,bytes,frames);
 
 @override
 String toString() {
-  return 'UiEvent.progress(streamId: $streamId, traceId: $traceId, current: $current, total: $total)';
+  return 'UiEvent.progress(streamId: $streamId, frameIndex: $frameIndex, bytes: $bytes, frames: $frames)';
 }
 
 
@@ -463,7 +495,7 @@ abstract mixin class $UiEvent_ProgressCopyWith<$Res> implements $UiEventCopyWith
   factory $UiEvent_ProgressCopyWith(UiEvent_Progress value, $Res Function(UiEvent_Progress) _then) = _$UiEvent_ProgressCopyWithImpl;
 @useResult
 $Res call({
- int streamId, BigInt traceId, BigInt current, BigInt total
+ int streamId, BigInt frameIndex, BigInt bytes, BigInt frames
 });
 
 
@@ -480,12 +512,12 @@ class _$UiEvent_ProgressCopyWithImpl<$Res>
 
 /// Create a copy of UiEvent
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') $Res call({Object? streamId = null,Object? traceId = null,Object? current = null,Object? total = null,}) {
+@pragma('vm:prefer-inline') $Res call({Object? streamId = null,Object? frameIndex = null,Object? bytes = null,Object? frames = null,}) {
   return _then(UiEvent_Progress(
 streamId: null == streamId ? _self.streamId : streamId // ignore: cast_nullable_to_non_nullable
-as int,traceId: null == traceId ? _self.traceId : traceId // ignore: cast_nullable_to_non_nullable
-as BigInt,current: null == current ? _self.current : current // ignore: cast_nullable_to_non_nullable
-as BigInt,total: null == total ? _self.total : total // ignore: cast_nullable_to_non_nullable
+as int,frameIndex: null == frameIndex ? _self.frameIndex : frameIndex // ignore: cast_nullable_to_non_nullable
+as BigInt,bytes: null == bytes ? _self.bytes : bytes // ignore: cast_nullable_to_non_nullable
+as BigInt,frames: null == frames ? _self.frames : frames // ignore: cast_nullable_to_non_nullable
 as BigInt,
   ));
 }
@@ -496,45 +528,44 @@ as BigInt,
 /// @nodoc
 
 
-class UiEvent_TransferComplete extends UiEvent {
-  const UiEvent_TransferComplete({required this.streamId, required this.traceId, required this.path}): super._();
+class UiEvent_Telemetry extends UiEvent {
+  const UiEvent_Telemetry({required this.name, required this.value}): super._();
   
 
- final  int streamId;
- final  BigInt traceId;
- final  String path;
+ final  String name;
+ final  BigInt value;
 
 /// Create a copy of UiEvent
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
 @pragma('vm:prefer-inline')
-$UiEvent_TransferCompleteCopyWith<UiEvent_TransferComplete> get copyWith => _$UiEvent_TransferCompleteCopyWithImpl<UiEvent_TransferComplete>(this, _$identity);
+$UiEvent_TelemetryCopyWith<UiEvent_Telemetry> get copyWith => _$UiEvent_TelemetryCopyWithImpl<UiEvent_Telemetry>(this, _$identity);
 
 
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is UiEvent_TransferComplete&&(identical(other.streamId, streamId) || other.streamId == streamId)&&(identical(other.traceId, traceId) || other.traceId == traceId)&&(identical(other.path, path) || other.path == path));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is UiEvent_Telemetry&&(identical(other.name, name) || other.name == name)&&(identical(other.value, value) || other.value == value));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,streamId,traceId,path);
+int get hashCode => Object.hash(runtimeType,name,value);
 
 @override
 String toString() {
-  return 'UiEvent.transferComplete(streamId: $streamId, traceId: $traceId, path: $path)';
+  return 'UiEvent.telemetry(name: $name, value: $value)';
 }
 
 
 }
 
 /// @nodoc
-abstract mixin class $UiEvent_TransferCompleteCopyWith<$Res> implements $UiEventCopyWith<$Res> {
-  factory $UiEvent_TransferCompleteCopyWith(UiEvent_TransferComplete value, $Res Function(UiEvent_TransferComplete) _then) = _$UiEvent_TransferCompleteCopyWithImpl;
+abstract mixin class $UiEvent_TelemetryCopyWith<$Res> implements $UiEventCopyWith<$Res> {
+  factory $UiEvent_TelemetryCopyWith(UiEvent_Telemetry value, $Res Function(UiEvent_Telemetry) _then) = _$UiEvent_TelemetryCopyWithImpl;
 @useResult
 $Res call({
- int streamId, BigInt traceId, String path
+ String name, BigInt value
 });
 
 
@@ -542,89 +573,88 @@ $Res call({
 
 }
 /// @nodoc
-class _$UiEvent_TransferCompleteCopyWithImpl<$Res>
-    implements $UiEvent_TransferCompleteCopyWith<$Res> {
-  _$UiEvent_TransferCompleteCopyWithImpl(this._self, this._then);
+class _$UiEvent_TelemetryCopyWithImpl<$Res>
+    implements $UiEvent_TelemetryCopyWith<$Res> {
+  _$UiEvent_TelemetryCopyWithImpl(this._self, this._then);
 
-  final UiEvent_TransferComplete _self;
-  final $Res Function(UiEvent_TransferComplete) _then;
+  final UiEvent_Telemetry _self;
+  final $Res Function(UiEvent_Telemetry) _then;
 
 /// Create a copy of UiEvent
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') $Res call({Object? streamId = null,Object? traceId = null,Object? path = null,}) {
-  return _then(UiEvent_TransferComplete(
+@pragma('vm:prefer-inline') $Res call({Object? name = null,Object? value = null,}) {
+  return _then(UiEvent_Telemetry(
+name: null == name ? _self.name : name // ignore: cast_nullable_to_non_nullable
+as String,value: null == value ? _self.value : value // ignore: cast_nullable_to_non_nullable
+as BigInt,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class UiEvent_FrameDrop extends UiEvent {
+  const UiEvent_FrameDrop({required this.streamId, required this.reason}): super._();
+  
+
+ final  int streamId;
+ final  String reason;
+
+/// Create a copy of UiEvent
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$UiEvent_FrameDropCopyWith<UiEvent_FrameDrop> get copyWith => _$UiEvent_FrameDropCopyWithImpl<UiEvent_FrameDrop>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is UiEvent_FrameDrop&&(identical(other.streamId, streamId) || other.streamId == streamId)&&(identical(other.reason, reason) || other.reason == reason));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,streamId,reason);
+
+@override
+String toString() {
+  return 'UiEvent.frameDrop(streamId: $streamId, reason: $reason)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $UiEvent_FrameDropCopyWith<$Res> implements $UiEventCopyWith<$Res> {
+  factory $UiEvent_FrameDropCopyWith(UiEvent_FrameDrop value, $Res Function(UiEvent_FrameDrop) _then) = _$UiEvent_FrameDropCopyWithImpl;
+@useResult
+$Res call({
+ int streamId, String reason
+});
+
+
+
+
+}
+/// @nodoc
+class _$UiEvent_FrameDropCopyWithImpl<$Res>
+    implements $UiEvent_FrameDropCopyWith<$Res> {
+  _$UiEvent_FrameDropCopyWithImpl(this._self, this._then);
+
+  final UiEvent_FrameDrop _self;
+  final $Res Function(UiEvent_FrameDrop) _then;
+
+/// Create a copy of UiEvent
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? streamId = null,Object? reason = null,}) {
+  return _then(UiEvent_FrameDrop(
 streamId: null == streamId ? _self.streamId : streamId // ignore: cast_nullable_to_non_nullable
-as int,traceId: null == traceId ? _self.traceId : traceId // ignore: cast_nullable_to_non_nullable
-as BigInt,path: null == path ? _self.path : path // ignore: cast_nullable_to_non_nullable
+as int,reason: null == reason ? _self.reason : reason // ignore: cast_nullable_to_non_nullable
 as String,
-  ));
-}
-
-
-}
-
-/// @nodoc
-
-
-class UiEvent_EarlyTermination extends UiEvent {
-  const UiEvent_EarlyTermination({required this.streamId, required this.traceId}): super._();
-  
-
- final  int streamId;
- final  BigInt traceId;
-
-/// Create a copy of UiEvent
-/// with the given fields replaced by the non-null parameter values.
-@JsonKey(includeFromJson: false, includeToJson: false)
-@pragma('vm:prefer-inline')
-$UiEvent_EarlyTerminationCopyWith<UiEvent_EarlyTermination> get copyWith => _$UiEvent_EarlyTerminationCopyWithImpl<UiEvent_EarlyTermination>(this, _$identity);
-
-
-
-@override
-bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is UiEvent_EarlyTermination&&(identical(other.streamId, streamId) || other.streamId == streamId)&&(identical(other.traceId, traceId) || other.traceId == traceId));
-}
-
-
-@override
-int get hashCode => Object.hash(runtimeType,streamId,traceId);
-
-@override
-String toString() {
-  return 'UiEvent.earlyTermination(streamId: $streamId, traceId: $traceId)';
-}
-
-
-}
-
-/// @nodoc
-abstract mixin class $UiEvent_EarlyTerminationCopyWith<$Res> implements $UiEventCopyWith<$Res> {
-  factory $UiEvent_EarlyTerminationCopyWith(UiEvent_EarlyTermination value, $Res Function(UiEvent_EarlyTermination) _then) = _$UiEvent_EarlyTerminationCopyWithImpl;
-@useResult
-$Res call({
- int streamId, BigInt traceId
-});
-
-
-
-
-}
-/// @nodoc
-class _$UiEvent_EarlyTerminationCopyWithImpl<$Res>
-    implements $UiEvent_EarlyTerminationCopyWith<$Res> {
-  _$UiEvent_EarlyTerminationCopyWithImpl(this._self, this._then);
-
-  final UiEvent_EarlyTermination _self;
-  final $Res Function(UiEvent_EarlyTermination) _then;
-
-/// Create a copy of UiEvent
-/// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') $Res call({Object? streamId = null,Object? traceId = null,}) {
-  return _then(UiEvent_EarlyTermination(
-streamId: null == streamId ? _self.streamId : streamId // ignore: cast_nullable_to_non_nullable
-as int,traceId: null == traceId ? _self.traceId : traceId // ignore: cast_nullable_to_non_nullable
-as BigInt,
   ));
 }
 
@@ -702,44 +732,43 @@ as String,
 /// @nodoc
 
 
-class UiEvent_Metric extends UiEvent {
-  const UiEvent_Metric({required this.name, required this.value}): super._();
+class UiEvent_VideoFrameReceived extends UiEvent {
+  const UiEvent_VideoFrameReceived({required this.data}): super._();
   
 
- final  String name;
- final  BigInt value;
+ final  Uint8List data;
 
 /// Create a copy of UiEvent
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
 @pragma('vm:prefer-inline')
-$UiEvent_MetricCopyWith<UiEvent_Metric> get copyWith => _$UiEvent_MetricCopyWithImpl<UiEvent_Metric>(this, _$identity);
+$UiEvent_VideoFrameReceivedCopyWith<UiEvent_VideoFrameReceived> get copyWith => _$UiEvent_VideoFrameReceivedCopyWithImpl<UiEvent_VideoFrameReceived>(this, _$identity);
 
 
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is UiEvent_Metric&&(identical(other.name, name) || other.name == name)&&(identical(other.value, value) || other.value == value));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is UiEvent_VideoFrameReceived&&const DeepCollectionEquality().equals(other.data, data));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,name,value);
+int get hashCode => Object.hash(runtimeType,const DeepCollectionEquality().hash(data));
 
 @override
 String toString() {
-  return 'UiEvent.metric(name: $name, value: $value)';
+  return 'UiEvent.videoFrameReceived(data: $data)';
 }
 
 
 }
 
 /// @nodoc
-abstract mixin class $UiEvent_MetricCopyWith<$Res> implements $UiEventCopyWith<$Res> {
-  factory $UiEvent_MetricCopyWith(UiEvent_Metric value, $Res Function(UiEvent_Metric) _then) = _$UiEvent_MetricCopyWithImpl;
+abstract mixin class $UiEvent_VideoFrameReceivedCopyWith<$Res> implements $UiEventCopyWith<$Res> {
+  factory $UiEvent_VideoFrameReceivedCopyWith(UiEvent_VideoFrameReceived value, $Res Function(UiEvent_VideoFrameReceived) _then) = _$UiEvent_VideoFrameReceivedCopyWithImpl;
 @useResult
 $Res call({
- String name, BigInt value
+ Uint8List data
 });
 
 
@@ -747,20 +776,19 @@ $Res call({
 
 }
 /// @nodoc
-class _$UiEvent_MetricCopyWithImpl<$Res>
-    implements $UiEvent_MetricCopyWith<$Res> {
-  _$UiEvent_MetricCopyWithImpl(this._self, this._then);
+class _$UiEvent_VideoFrameReceivedCopyWithImpl<$Res>
+    implements $UiEvent_VideoFrameReceivedCopyWith<$Res> {
+  _$UiEvent_VideoFrameReceivedCopyWithImpl(this._self, this._then);
 
-  final UiEvent_Metric _self;
-  final $Res Function(UiEvent_Metric) _then;
+  final UiEvent_VideoFrameReceived _self;
+  final $Res Function(UiEvent_VideoFrameReceived) _then;
 
 /// Create a copy of UiEvent
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') $Res call({Object? name = null,Object? value = null,}) {
-  return _then(UiEvent_Metric(
-name: null == name ? _self.name : name // ignore: cast_nullable_to_non_nullable
-as String,value: null == value ? _self.value : value // ignore: cast_nullable_to_non_nullable
-as BigInt,
+@pragma('vm:prefer-inline') $Res call({Object? data = null,}) {
+  return _then(UiEvent_VideoFrameReceived(
+data: null == data ? _self.data : data // ignore: cast_nullable_to_non_nullable
+as Uint8List,
   ));
 }
 
