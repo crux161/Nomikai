@@ -5,27 +5,69 @@ import VideoToolbox
 
 private enum HevcDumperError: LocalizedError {
   case cameraPermissionDenied
+  case microphonePermissionDenied
   case cameraUnavailable
+  case microphoneUnavailable
   case cannotAddInput
+  case cannotAddAudioInput
   case cannotAddOutput
+  case cannotAddAudioOutput
   case cannotCreateEncoder(status: OSStatus)
+  case cannotSetBitrate(status: OSStatus)
+  case cannotCreateAudioConverter
+  case invalidBitrate
   case notRecording
 
   var errorDescription: String? {
     switch self {
     case .cameraPermissionDenied:
       return "Camera permission is required to record HEVC."
+    case .microphonePermissionDenied:
+      return "Microphone permission is required to capture AAC audio."
     case .cameraUnavailable:
       return "No usable camera was found on this device."
+    case .microphoneUnavailable:
+      return "No usable microphone was found on this device."
     case .cannotAddInput:
       return "Failed to add camera input to AVCaptureSession."
+    case .cannotAddAudioInput:
+      return "Failed to add microphone input to AVCaptureSession."
     case .cannotAddOutput:
       return "Failed to add AVCaptureVideoDataOutput to AVCaptureSession."
+    case .cannotAddAudioOutput:
+      return "Failed to add AVCaptureAudioDataOutput to AVCaptureSession."
     case .cannotCreateEncoder(let status):
       return "Failed to create HEVC encoder session (status \(status))."
+    case .cannotSetBitrate(let status):
+      return "Failed to update HEVC encoder bitrate (status \(status))."
+    case .cannotCreateAudioConverter:
+      return "Failed to create AAC audio converter."
+    case .invalidBitrate:
+      return "Bitrate must be a positive integer."
     case .notRecording:
       return "No active HEVC recording session."
     }
+  }
+}
+
+final class HevcAudioStreamHandler: NSObject, FlutterStreamHandler {
+  weak var owner: HevcDumper?
+
+  init(owner: HevcDumper? = nil) {
+    self.owner = owner
+    super.init()
+  }
+
+  func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink)
+    -> FlutterError?
+  {
+    owner?.setAudioEventSink(events)
+    return nil
+  }
+
+  func onCancel(withArguments arguments: Any?) -> FlutterError? {
+    owner?.setAudioEventSink(nil)
+    return nil
   }
 }
 
@@ -52,38 +94,82 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
 
   private let captureSession = AVCaptureSession()
   private let videoOutput = AVCaptureVideoDataOutput()
+  private let audioOutput = AVCaptureAudioDataOutput()
   private let sessionQueue = DispatchQueue(label: "com.nomikai.sankaku.hevc_dumper.session")
 
   private var compressionSession: VTCompressionSession?
-  private var eventSink: FlutterEventSink?
+  private var videoEventSink: FlutterEventSink?
+  private var audioEventSink: FlutterEventSink?
+  private var audioConverter: AVAudioConverter?
+  private var audioInputFormat: AVAudioFormat?
+  private var audioOutputFormat: AVAudioFormat?
+  private var audioConverterError: HevcDumperError?
+
+  let audioStreamHandler: HevcAudioStreamHandler
 
   private(set) var isRecording = false
+
+  override init() {
+    self.audioStreamHandler = HevcAudioStreamHandler()
+    super.init()
+    self.audioStreamHandler.owner = self
+  }
 
   func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink)
     -> FlutterError?
   {
-    eventSink = events
+    videoEventSink = events
     return nil
   }
 
   func onCancel(withArguments arguments: Any?) -> FlutterError? {
-    eventSink = nil
+    videoEventSink = nil
     return nil
   }
 
-  func startRecording(completion: @escaping (Error?) -> Void) {
-    let authorization = AVCaptureDevice.authorizationStatus(for: .video)
+  func setAudioEventSink(_ sink: FlutterEventSink?) {
+    audioEventSink = sink
+  }
 
-    switch authorization {
+  private func ensureMediaAuthorization(
+    for mediaType: AVMediaType,
+    deniedError: HevcDumperError,
+    completion: @escaping (Bool) -> Void
+  ) {
+    let status = AVCaptureDevice.authorizationStatus(for: mediaType)
+    switch status {
     case .authorized:
-      sessionQueue.async {
-        self.startRecordingOnSessionQueue(completion: completion)
-      }
+      completion(true)
     case .notDetermined:
-      AVCaptureDevice.requestAccess(for: .video) { granted in
-        guard granted else {
+      AVCaptureDevice.requestAccess(for: mediaType) { granted in
+        completion(granted)
+      }
+    case .denied, .restricted:
+      NSLog("HevcDumper: authorization denied for \(mediaType.rawValue): \(deniedError.localizedDescription)")
+      completion(false)
+    @unknown default:
+      completion(false)
+    }
+  }
+
+  func startRecording(completion: @escaping (Error?) -> Void) {
+    ensureMediaAuthorization(for: .video, deniedError: HevcDumperError.cameraPermissionDenied) {
+      [weak self] videoGranted in
+      guard let self else { return }
+      guard videoGranted else {
+        DispatchQueue.main.async {
+          completion(HevcDumperError.cameraPermissionDenied)
+        }
+        return
+      }
+
+      self.ensureMediaAuthorization(
+        for: .audio,
+        deniedError: HevcDumperError.microphonePermissionDenied
+      ) { audioGranted in
+        guard audioGranted else {
           DispatchQueue.main.async {
-            completion(HevcDumperError.cameraPermissionDenied)
+            completion(HevcDumperError.microphonePermissionDenied)
           }
           return
         }
@@ -91,14 +177,6 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
         self.sessionQueue.async {
           self.startRecordingOnSessionQueue(completion: completion)
         }
-      }
-    case .denied, .restricted:
-      DispatchQueue.main.async {
-        completion(HevcDumperError.cameraPermissionDenied)
-      }
-    @unknown default:
-      DispatchQueue.main.async {
-        completion(HevcDumperError.cameraPermissionDenied)
       }
     }
   }
@@ -121,7 +199,46 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
       }
 
       self.videoOutput.setSampleBufferDelegate(nil, queue: nil)
+      self.audioOutput.setSampleBufferDelegate(nil, queue: nil)
+      self.audioConverter = nil
+      self.audioInputFormat = nil
+      self.audioOutputFormat = nil
+      self.audioConverterError = nil
       self.isRecording = false
+
+      DispatchQueue.main.async {
+        completion(nil)
+      }
+    }
+  }
+
+  func setBitrate(bitrate: Int, completion: @escaping (Error?) -> Void) {
+    sessionQueue.async {
+      guard bitrate > 0 else {
+        DispatchQueue.main.async {
+          completion(HevcDumperError.invalidBitrate)
+        }
+        return
+      }
+      guard self.isRecording, let compressionSession = self.compressionSession else {
+        DispatchQueue.main.async {
+          completion(HevcDumperError.notRecording)
+        }
+        return
+      }
+
+      let normalizedBitrate = NSNumber(value: bitrate)
+      let status = VTSessionSetProperty(
+        compressionSession,
+        key: kVTCompressionPropertyKey_AverageBitRate,
+        value: normalizedBitrate
+      )
+      if status != noErr {
+        DispatchQueue.main.async {
+          completion(HevcDumperError.cannotSetBitrate(status: status))
+        }
+        return
+      }
 
       DispatchQueue.main.async {
         completion(nil)
@@ -187,6 +304,22 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
     }
     captureSession.addOutput(videoOutput)
 
+    guard let microphone = AVCaptureDevice.default(for: .audio) else {
+      throw HevcDumperError.microphoneUnavailable
+    }
+
+    let audioInput = try AVCaptureDeviceInput(device: microphone)
+    guard captureSession.canAddInput(audioInput) else {
+      throw HevcDumperError.cannotAddAudioInput
+    }
+    captureSession.addInput(audioInput)
+
+    audioOutput.setSampleBufferDelegate(self, queue: sessionQueue)
+    guard captureSession.canAddOutput(audioOutput) else {
+      throw HevcDumperError.cannotAddAudioOutput
+    }
+    captureSession.addOutput(audioOutput)
+
     return CMVideoFormatDescriptionGetDimensions(camera.activeFormat.formatDescription)
   }
 
@@ -245,6 +378,11 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
     }
 
     videoOutput.setSampleBufferDelegate(nil, queue: nil)
+    audioOutput.setSampleBufferDelegate(nil, queue: nil)
+    audioConverter = nil
+    audioInputFormat = nil
+    audioOutputFormat = nil
+    audioConverterError = nil
     isRecording = false
   }
 
@@ -266,7 +404,7 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
 
   private func emitFrame(_ data: Data, isKeyframe: Bool) {
     DispatchQueue.main.async { [weak self] in
-      guard let eventSink = self?.eventSink else { return }
+      guard let eventSink = self?.videoEventSink else { return }
       eventSink([
         "bytes": FlutterStandardTypedData(bytes: data),
         "is_keyframe": isKeyframe,
@@ -331,6 +469,153 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
     }
   }
 
+  private func handleAudioSampleBuffer(_ sampleBuffer: CMSampleBuffer) {
+    guard CMSampleBufferDataIsReady(sampleBuffer) else { return }
+
+    do {
+      let converter = try ensureAudioConverter(for: sampleBuffer)
+      guard
+        let pcmBuffer = makePcmBuffer(from: sampleBuffer, format: converter.inputFormat),
+        let aacBytes = encodeAac(from: pcmBuffer, using: converter),
+        !aacBytes.isEmpty
+      else {
+        return
+      }
+
+      emitAudioFrame(aacBytes)
+    } catch {
+      if let dumpError = error as? HevcDumperError {
+        audioConverterError = dumpError
+      }
+      NSLog("HevcDumper: audio encode error: \(error.localizedDescription)")
+    }
+  }
+
+  private func emitAudioFrame(_ data: Data) {
+    DispatchQueue.main.async { [weak self] in
+      guard let eventSink = self?.audioEventSink else { return }
+      eventSink(FlutterStandardTypedData(bytes: data))
+    }
+  }
+
+  private func ensureAudioConverter(for sampleBuffer: CMSampleBuffer) throws -> AVAudioConverter {
+    let inputFormat = try makeInputAudioFormat(from: sampleBuffer)
+
+    let needsNewConverter: Bool
+    if let existingInputFormat = audioInputFormat,
+      let existingOutputFormat = audioOutputFormat,
+      let _ = audioConverter
+    {
+      needsNewConverter =
+        existingInputFormat.sampleRate != inputFormat.sampleRate
+        || existingInputFormat.channelCount != inputFormat.channelCount
+        || existingOutputFormat.channelCount != 1
+        || existingOutputFormat.sampleRate != 48_000
+    } else {
+      needsNewConverter = true
+    }
+
+    if !needsNewConverter, let audioConverter {
+      return audioConverter
+    }
+
+    guard
+      let outputFormat = AVAudioFormat(
+        settings: [
+          AVFormatIDKey: kAudioFormatMPEG4AAC,
+          AVSampleRateKey: 48_000,
+          AVNumberOfChannelsKey: 1,
+          AVEncoderBitRateKey: 64_000,
+        ]
+      ),
+      let converter = AVAudioConverter(from: inputFormat, to: outputFormat)
+    else {
+      throw HevcDumperError.cannotCreateAudioConverter
+    }
+
+    audioInputFormat = inputFormat
+    audioOutputFormat = outputFormat
+    audioConverter = converter
+    audioConverterError = nil
+
+    return converter
+  }
+
+  private func makeInputAudioFormat(from sampleBuffer: CMSampleBuffer) throws -> AVAudioFormat {
+    guard
+      let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer),
+      let streamDescription = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription),
+      let format = AVAudioFormat(streamDescription: streamDescription)
+    else {
+      throw HevcDumperError.cannotCreateAudioConverter
+    }
+
+    return format
+  }
+
+  private func makePcmBuffer(from sampleBuffer: CMSampleBuffer, format: AVAudioFormat)
+    -> AVAudioPCMBuffer?
+  {
+    let sampleCount = CMSampleBufferGetNumSamples(sampleBuffer)
+    guard sampleCount > 0 else { return nil }
+
+    let frameCount = AVAudioFrameCount(sampleCount)
+    guard let pcmBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
+      return nil
+    }
+    pcmBuffer.frameLength = frameCount
+
+    let status = CMSampleBufferCopyPCMDataIntoAudioBufferList(
+      sampleBuffer,
+      at: 0,
+      frameCount: Int32(sampleCount),
+      into: pcmBuffer.mutableAudioBufferList
+    )
+    guard status == noErr else {
+      NSLog("HevcDumper: failed to copy PCM audio (\(status))")
+      return nil
+    }
+
+    return pcmBuffer
+  }
+
+  private func encodeAac(from pcmBuffer: AVAudioPCMBuffer, using converter: AVAudioConverter)
+    -> Data?
+  {
+    let packetCapacity = max(
+      AVAudioPacketCount(1),
+      AVAudioPacketCount((pcmBuffer.frameLength / 1024) + 1)
+    )
+    let outputBuffer = AVAudioCompressedBuffer(
+      format: converter.outputFormat,
+      packetCapacity: packetCapacity,
+      maximumPacketSize: converter.maximumOutputPacketSize
+    )
+
+    var fedInput = false
+    var conversionError: NSError?
+    let status = converter.convert(to: outputBuffer, error: &conversionError) { _, outStatus in
+      if fedInput {
+        outStatus.pointee = .endOfStream
+        return nil
+      }
+
+      fedInput = true
+      outStatus.pointee = .haveData
+      return pcmBuffer
+    }
+
+    if status == .error {
+      if let conversionError {
+        NSLog("HevcDumper: AAC conversion failed: \(conversionError)")
+      }
+      return nil
+    }
+
+    guard outputBuffer.byteLength > 0 else { return nil }
+    return Data(bytes: outputBuffer.data, count: Int(outputBuffer.byteLength))
+  }
+
   private func isKeyFrame(_ sampleBuffer: CMSampleBuffer) -> Bool {
     guard
       let attachments = CMSampleBufferGetSampleAttachmentsArray(
@@ -347,14 +632,21 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
   }
 }
 
-extension HevcDumper: AVCaptureVideoDataOutputSampleBufferDelegate {
+extension HevcDumper: AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureAudioDataOutputSampleBufferDelegate {
   func captureOutput(
     _ output: AVCaptureOutput,
     didOutput sampleBuffer: CMSampleBuffer,
     from connection: AVCaptureConnection
   ) {
+    guard isRecording else { return }
+
+    if output === audioOutput {
+      handleAudioSampleBuffer(sampleBuffer)
+      return
+    }
+
     guard
-      isRecording,
+      output === videoOutput,
       let compressionSession,
       let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer)
     else {

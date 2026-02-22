@@ -37,7 +37,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1582856611;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1247095039;
 
 // Section: executor
 
@@ -75,6 +75,41 @@ fn wire__crate__api__simple__init_app_impl(
                     })?;
                     Ok(output_ok)
                 })())
+            }
+        },
+    )
+}
+fn wire__crate__api__simple__push_audio_frame_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "push_audio_frame",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_frame_bytes = <Vec<u8>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                    (move || {
+                        let output_ok = crate::api::simple::push_audio_frame(api_frame_bytes)?;
+                        Ok(output_ok)
+                    })(),
+                )
             }
         },
     )
@@ -143,7 +178,6 @@ fn wire__crate__api__simple__start_sankaku_receiver_impl(
                 flutter_rust_bridge::for_generated::SseCodec,
             >>::sse_decode(&mut deserializer);
             let api_bind_addr = <String>::sse_decode(&mut deserializer);
-            let api_psk_hex = <String>::sse_decode(&mut deserializer);
             let api_graph_bytes = <Vec<u8>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
@@ -152,7 +186,6 @@ fn wire__crate__api__simple__start_sankaku_receiver_impl(
                         let output_ok = crate::api::simple::start_sankaku_receiver(
                             api_sink,
                             api_bind_addr,
-                            api_psk_hex,
                             api_graph_bytes,
                         )
                         .await?;
@@ -191,7 +224,6 @@ fn wire__crate__api__simple__start_sankaku_sender_impl(
                 flutter_rust_bridge::for_generated::SseCodec,
             >>::sse_decode(&mut deserializer);
             let api_dest = <String>::sse_decode(&mut deserializer);
-            let api_psk_hex = <String>::sse_decode(&mut deserializer);
             let api_graph_bytes = <Vec<u8>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
@@ -200,7 +232,6 @@ fn wire__crate__api__simple__start_sankaku_sender_impl(
                         let output_ok = crate::api::simple::start_sankaku_sender(
                             api_sink,
                             api_dest,
-                            api_psk_hex,
                             api_graph_bytes,
                         )
                         .await?;
@@ -380,10 +411,20 @@ impl SseDecode for crate::api::simple::UiEvent {
                 };
             }
             8 => {
+                let mut var_bitrateBps = <u32>::sse_decode(deserializer);
+                return crate::api::simple::UiEvent::BitrateChanged {
+                    bitrate_bps: var_bitrateBps,
+                };
+            }
+            9 => {
                 let mut var_data = <Vec<u8>>::sse_decode(deserializer);
                 return crate::api::simple::UiEvent::VideoFrameReceived { data: var_data };
             }
-            9 => {
+            10 => {
+                let mut var_data = <Vec<u8>>::sse_decode(deserializer);
+                return crate::api::simple::UiEvent::AudioFrameReceived { data: var_data };
+            }
+            11 => {
                 let mut var_msg = <String>::sse_decode(deserializer);
                 return crate::api::simple::UiEvent::Error { msg: var_msg };
             }
@@ -416,12 +457,13 @@ fn pde_ffi_dispatcher_primary_impl(
     // Codec=Pde (Serialization + dispatch), see doc to use other codecs
     match func_id {
         1 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
-        2 => wire__crate__api__simple__push_hevc_frame_impl(port, ptr, rust_vec_len, data_len),
-        3 => {
+        2 => wire__crate__api__simple__push_audio_frame_impl(port, ptr, rust_vec_len, data_len),
+        3 => wire__crate__api__simple__push_hevc_frame_impl(port, ptr, rust_vec_len, data_len),
+        4 => {
             wire__crate__api__simple__start_sankaku_receiver_impl(port, ptr, rust_vec_len, data_len)
         }
-        4 => wire__crate__api__simple__start_sankaku_sender_impl(port, ptr, rust_vec_len, data_len),
-        5 => wire__crate__api__simple__stop_sankaku_sender_impl(port, ptr, rust_vec_len, data_len),
+        5 => wire__crate__api__simple__start_sankaku_sender_impl(port, ptr, rust_vec_len, data_len),
+        6 => wire__crate__api__simple__stop_sankaku_sender_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -494,11 +536,17 @@ impl flutter_rust_bridge::IntoDart for crate::api::simple::UiEvent {
                 message.into_into_dart().into_dart(),
             ]
             .into_dart(),
+            crate::api::simple::UiEvent::BitrateChanged { bitrate_bps } => {
+                [8.into_dart(), bitrate_bps.into_into_dart().into_dart()].into_dart()
+            }
             crate::api::simple::UiEvent::VideoFrameReceived { data } => {
-                [8.into_dart(), data.into_into_dart().into_dart()].into_dart()
+                [9.into_dart(), data.into_into_dart().into_dart()].into_dart()
+            }
+            crate::api::simple::UiEvent::AudioFrameReceived { data } => {
+                [10.into_dart(), data.into_into_dart().into_dart()].into_dart()
             }
             crate::api::simple::UiEvent::Error { msg } => {
-                [9.into_dart(), msg.into_into_dart().into_dart()].into_dart()
+                [11.into_dart(), msg.into_into_dart().into_dart()].into_dart()
             }
             _ => {
                 unimplemented!("");
@@ -627,12 +675,20 @@ impl SseEncode for crate::api::simple::UiEvent {
                 <String>::sse_encode(code, serializer);
                 <String>::sse_encode(message, serializer);
             }
-            crate::api::simple::UiEvent::VideoFrameReceived { data } => {
+            crate::api::simple::UiEvent::BitrateChanged { bitrate_bps } => {
                 <i32>::sse_encode(8, serializer);
+                <u32>::sse_encode(bitrate_bps, serializer);
+            }
+            crate::api::simple::UiEvent::VideoFrameReceived { data } => {
+                <i32>::sse_encode(9, serializer);
+                <Vec<u8>>::sse_encode(data, serializer);
+            }
+            crate::api::simple::UiEvent::AudioFrameReceived { data } => {
+                <i32>::sse_encode(10, serializer);
                 <Vec<u8>>::sse_encode(data, serializer);
             }
             crate::api::simple::UiEvent::Error { msg } => {
-                <i32>::sse_encode(9, serializer);
+                <i32>::sse_encode(11, serializer);
                 <String>::sse_encode(msg, serializer);
             }
             _ => {

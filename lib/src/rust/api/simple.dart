@@ -8,7 +8,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'simple.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `clear_hevc_frame_tx`, `hevc_frame_tx_slot`, `install_hevc_frame_tx`, `run_receiver_loop`, `run_sender_loop`, `send_sender_frame`, `sink_event`, `unix_us_now`
+// These functions are ignored because they are not marked as `pub`: `audio_frame_tx_slot`, `clear_audio_frame_tx`, `clear_hevc_frame_tx`, `hevc_frame_tx_slot`, `install_audio_frame_tx`, `install_hevc_frame_tx`, `run_receiver_loop`, `run_sender_loop`, `send_sender_frame`, `sink_event`, `unix_us_now`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `FrameIngressGuard`, `SenderRunGuard`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `drop`, `drop`, `from`
 
@@ -20,28 +20,27 @@ Future<void> pushHevcFrame({
   isKeyframe: isKeyframe,
 );
 
+Future<void> pushAudioFrame({required List<int> frameBytes}) =>
+    RustLib.instance.api.crateApiSimplePushAudioFrame(frameBytes: frameBytes);
+
 Future<void> stopSankakuSender() =>
     RustLib.instance.api.crateApiSimpleStopSankakuSender();
 
 /// Starts an async Sankaku sender loop and streams transport state/events to Dart.
 Stream<UiEvent> startSankakuSender({
   required String dest,
-  required String pskHex,
   required List<int> graphBytes,
 }) => RustLib.instance.api.crateApiSimpleStartSankakuSender(
   dest: dest,
-  pskHex: pskHex,
   graphBytes: graphBytes,
 );
 
 /// Starts an async Sankaku receiver loop and streams transport state/events to Dart.
 Stream<UiEvent> startSankakuReceiver({
   required String bindAddr,
-  required String pskHex,
   required List<int> graphBytes,
 }) => RustLib.instance.api.crateApiSimpleStartSankakuReceiver(
   bindAddr: bindAddr,
-  pskHex: pskHex,
   graphBytes: graphBytes,
 );
 
@@ -75,7 +74,11 @@ sealed class UiEvent with _$UiEvent {
   }) = UiEvent_FrameDrop;
   const factory UiEvent.fault({required String code, required String message}) =
       UiEvent_Fault;
+  const factory UiEvent.bitrateChanged({required int bitrateBps}) =
+      UiEvent_BitrateChanged;
   const factory UiEvent.videoFrameReceived({required Uint8List data}) =
       UiEvent_VideoFrameReceived;
+  const factory UiEvent.audioFrameReceived({required Uint8List data}) =
+      UiEvent_AudioFrameReceived;
   const factory UiEvent.error({required String msg}) = UiEvent_Error;
 }

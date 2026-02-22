@@ -66,7 +66,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => 1582856611;
+  int get rustContentHash => -1247095039;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -79,6 +79,8 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
 abstract class RustLibApi extends BaseApi {
   Future<void> crateApiSimpleInitApp();
 
+  Future<void> crateApiSimplePushAudioFrame({required List<int> frameBytes});
+
   Future<void> crateApiSimplePushHevcFrame({
     required List<int> frameBytes,
     required bool isKeyframe,
@@ -86,13 +88,11 @@ abstract class RustLibApi extends BaseApi {
 
   Stream<UiEvent> crateApiSimpleStartSankakuReceiver({
     required String bindAddr,
-    required String pskHex,
     required List<int> graphBytes,
   });
 
   Stream<UiEvent> crateApiSimpleStartSankakuSender({
     required String dest,
-    required String pskHex,
     required List<int> graphBytes,
   });
 
@@ -135,6 +135,37 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "init_app", argNames: []);
 
   @override
+  Future<void> crateApiSimplePushAudioFrame({required List<int> frameBytes}) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_list_prim_u_8_loose(frameBytes, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 2,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiSimplePushAudioFrameConstMeta,
+        argValues: [frameBytes],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSimplePushAudioFrameConstMeta =>
+      const TaskConstMeta(
+        debugName: "push_audio_frame",
+        argNames: ["frameBytes"],
+      );
+
+  @override
   Future<void> crateApiSimplePushHevcFrame({
     required List<int> frameBytes,
     required bool isKeyframe,
@@ -148,7 +179,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 2,
+            funcId: 3,
             port: port_,
           );
         },
@@ -172,7 +203,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @override
   Stream<UiEvent> crateApiSimpleStartSankakuReceiver({
     required String bindAddr,
-    required String pskHex,
     required List<int> graphBytes,
   }) {
     final sink = RustStreamSink<UiEvent>();
@@ -183,49 +213,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             final serializer = SseSerializer(generalizedFrbRustBinding);
             sse_encode_StreamSink_ui_event_Sse(sink, serializer);
             sse_encode_String(bindAddr, serializer);
-            sse_encode_String(pskHex, serializer);
-            sse_encode_list_prim_u_8_loose(graphBytes, serializer);
-            pdeCallFfi(
-              generalizedFrbRustBinding,
-              serializer,
-              funcId: 3,
-              port: port_,
-            );
-          },
-          codec: SseCodec(
-            decodeSuccessData: sse_decode_unit,
-            decodeErrorData: sse_decode_AnyhowException,
-          ),
-          constMeta: kCrateApiSimpleStartSankakuReceiverConstMeta,
-          argValues: [sink, bindAddr, pskHex, graphBytes],
-          apiImpl: this,
-        ),
-      ),
-    );
-    return sink.stream;
-  }
-
-  TaskConstMeta get kCrateApiSimpleStartSankakuReceiverConstMeta =>
-      const TaskConstMeta(
-        debugName: "start_sankaku_receiver",
-        argNames: ["sink", "bindAddr", "pskHex", "graphBytes"],
-      );
-
-  @override
-  Stream<UiEvent> crateApiSimpleStartSankakuSender({
-    required String dest,
-    required String pskHex,
-    required List<int> graphBytes,
-  }) {
-    final sink = RustStreamSink<UiEvent>();
-    unawaited(
-      handler.executeNormal(
-        NormalTask(
-          callFfi: (port_) {
-            final serializer = SseSerializer(generalizedFrbRustBinding);
-            sse_encode_StreamSink_ui_event_Sse(sink, serializer);
-            sse_encode_String(dest, serializer);
-            sse_encode_String(pskHex, serializer);
             sse_encode_list_prim_u_8_loose(graphBytes, serializer);
             pdeCallFfi(
               generalizedFrbRustBinding,
@@ -238,8 +225,48 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             decodeSuccessData: sse_decode_unit,
             decodeErrorData: sse_decode_AnyhowException,
           ),
+          constMeta: kCrateApiSimpleStartSankakuReceiverConstMeta,
+          argValues: [sink, bindAddr, graphBytes],
+          apiImpl: this,
+        ),
+      ),
+    );
+    return sink.stream;
+  }
+
+  TaskConstMeta get kCrateApiSimpleStartSankakuReceiverConstMeta =>
+      const TaskConstMeta(
+        debugName: "start_sankaku_receiver",
+        argNames: ["sink", "bindAddr", "graphBytes"],
+      );
+
+  @override
+  Stream<UiEvent> crateApiSimpleStartSankakuSender({
+    required String dest,
+    required List<int> graphBytes,
+  }) {
+    final sink = RustStreamSink<UiEvent>();
+    unawaited(
+      handler.executeNormal(
+        NormalTask(
+          callFfi: (port_) {
+            final serializer = SseSerializer(generalizedFrbRustBinding);
+            sse_encode_StreamSink_ui_event_Sse(sink, serializer);
+            sse_encode_String(dest, serializer);
+            sse_encode_list_prim_u_8_loose(graphBytes, serializer);
+            pdeCallFfi(
+              generalizedFrbRustBinding,
+              serializer,
+              funcId: 5,
+              port: port_,
+            );
+          },
+          codec: SseCodec(
+            decodeSuccessData: sse_decode_unit,
+            decodeErrorData: sse_decode_AnyhowException,
+          ),
           constMeta: kCrateApiSimpleStartSankakuSenderConstMeta,
-          argValues: [sink, dest, pskHex, graphBytes],
+          argValues: [sink, dest, graphBytes],
           apiImpl: this,
         ),
       ),
@@ -250,7 +277,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiSimpleStartSankakuSenderConstMeta =>
       const TaskConstMeta(
         debugName: "start_sankaku_sender",
-        argNames: ["sink", "dest", "pskHex", "graphBytes"],
+        argNames: ["sink", "dest", "graphBytes"],
       );
 
   @override
@@ -262,7 +289,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 5,
+            funcId: 6,
             port: port_,
           );
         },
@@ -375,10 +402,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           message: dco_decode_String(raw[2]),
         );
       case 8:
+        return UiEvent_BitrateChanged(bitrateBps: dco_decode_u_32(raw[1]));
+      case 9:
         return UiEvent_VideoFrameReceived(
           data: dco_decode_list_prim_u_8_strict(raw[1]),
         );
-      case 9:
+      case 10:
+        return UiEvent_AudioFrameReceived(
+          data: dco_decode_list_prim_u_8_strict(raw[1]),
+        );
+      case 11:
         return UiEvent_Error(msg: dco_decode_String(raw[1]));
       default:
         throw Exception("unreachable");
@@ -497,9 +530,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         var var_message = sse_decode_String(deserializer);
         return UiEvent_Fault(code: var_code, message: var_message);
       case 8:
+        var var_bitrateBps = sse_decode_u_32(deserializer);
+        return UiEvent_BitrateChanged(bitrateBps: var_bitrateBps);
+      case 9:
         var var_data = sse_decode_list_prim_u_8_strict(deserializer);
         return UiEvent_VideoFrameReceived(data: var_data);
-      case 9:
+      case 10:
+        var var_data = sse_decode_list_prim_u_8_strict(deserializer);
+        return UiEvent_AudioFrameReceived(data: var_data);
+      case 11:
         var var_msg = sse_decode_String(deserializer);
         return UiEvent_Error(msg: var_msg);
       default:
@@ -639,11 +678,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_i_32(7, serializer);
         sse_encode_String(code, serializer);
         sse_encode_String(message, serializer);
-      case UiEvent_VideoFrameReceived(data: final data):
+      case UiEvent_BitrateChanged(bitrateBps: final bitrateBps):
         sse_encode_i_32(8, serializer);
+        sse_encode_u_32(bitrateBps, serializer);
+      case UiEvent_VideoFrameReceived(data: final data):
+        sse_encode_i_32(9, serializer);
+        sse_encode_list_prim_u_8_strict(data, serializer);
+      case UiEvent_AudioFrameReceived(data: final data):
+        sse_encode_i_32(10, serializer);
         sse_encode_list_prim_u_8_strict(data, serializer);
       case UiEvent_Error(msg: final msg):
-        sse_encode_i_32(9, serializer);
+        sse_encode_i_32(11, serializer);
         sse_encode_String(msg, serializer);
     }
   }

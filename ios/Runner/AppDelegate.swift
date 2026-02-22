@@ -18,8 +18,13 @@ import UIKit
         name: "com.nomikai.sankaku/hevc_stream",
         binaryMessenger: flutterViewController.binaryMessenger
       )
+      let audioEventChannel = FlutterEventChannel(
+        name: "com.nomikai.sankaku/audio_stream",
+        binaryMessenger: flutterViewController.binaryMessenger
+      )
 
       eventChannel.setStreamHandler(hevcDumper)
+      audioEventChannel.setStreamHandler(hevcDumper.audioStreamHandler)
 
       methodChannel.setMethodCallHandler { [weak self] call, result in
         guard let self else {
@@ -84,6 +89,55 @@ import UIKit
               return
             }
 
+            result(nil)
+          }
+
+        case "set_bitrate":
+          guard self.hevcDumper.isRecording else {
+            result(
+              FlutterError(
+                code: "NOT_RECORDING",
+                message: "No HEVC recording is active.",
+                details: nil
+              )
+            )
+            return
+          }
+
+          let requestedBitrate: Int?
+          if let bitrate = call.arguments as? Int {
+            requestedBitrate = bitrate
+          } else if
+            let payload = call.arguments as? [String: Any],
+            let bitrate = payload["bitrate"] as? Int
+          {
+            requestedBitrate = bitrate
+          } else {
+            requestedBitrate = nil
+          }
+
+          guard let bitrate = requestedBitrate, bitrate > 0 else {
+            result(
+              FlutterError(
+                code: "INVALID_ARGUMENT",
+                message: "set_bitrate expects a positive integer bitrate.",
+                details: nil
+              )
+            )
+            return
+          }
+
+          self.hevcDumper.setBitrate(bitrate: bitrate) { error in
+            if let error {
+              result(
+                FlutterError(
+                  code: "SET_BITRATE_FAILED",
+                  message: error.localizedDescription,
+                  details: nil
+                )
+              )
+              return
+            }
             result(nil)
           }
 

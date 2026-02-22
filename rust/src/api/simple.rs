@@ -1,19 +1,18 @@
 use crate::frb_generated::StreamSink;
 use anyhow::{anyhow, bail, Context};
 use flutter_rust_bridge::frb;
-use sankaku_core::{
-    parse_psk_hex, KyuEvent as SankakuEvent, SankakuReceiver, SankakuSender, VideoFrame,
-};
+use sankaku_core::{KyuEvent as SankakuEvent, SankakuReceiver, SankakuSender, VideoFrame};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::task::spawn_blocking;
-use tokio::time::MissedTickBehavior;
 
 type HevcFrameTx = UnboundedSender<(Vec<u8>, bool)>;
+type AudioFrameTx = UnboundedSender<Vec<u8>>;
 
 static HEVC_FRAME_TX: OnceLock<Mutex<Option<HevcFrameTx>>> = OnceLock::new();
+static AUDIO_FRAME_TX: OnceLock<Mutex<Option<AudioFrameTx>>> = OnceLock::new();
 static SENDER_SHOULD_RUN: AtomicBool = AtomicBool::new(false);
 
 #[frb(init)]
@@ -55,7 +54,13 @@ pub enum UiEvent {
         code: String,
         message: String,
     },
+    BitrateChanged {
+        bitrate_bps: u32,
+    },
     VideoFrameReceived {
+        data: Vec<u8>,
+    },
+    AudioFrameReceived {
         data: Vec<u8>,
     },
     Error {
@@ -99,6 +104,10 @@ fn hevc_frame_tx_slot() -> &'static Mutex<Option<HevcFrameTx>> {
     HEVC_FRAME_TX.get_or_init(|| Mutex::new(None))
 }
 
+fn audio_frame_tx_slot() -> &'static Mutex<Option<AudioFrameTx>> {
+    AUDIO_FRAME_TX.get_or_init(|| Mutex::new(None))
+}
+
 fn install_hevc_frame_tx(tx: HevcFrameTx) -> anyhow::Result<()> {
     let mut guard = hevc_frame_tx_slot()
         .lock()
@@ -116,11 +125,29 @@ fn clear_hevc_frame_tx() {
     }
 }
 
+fn install_audio_frame_tx(tx: AudioFrameTx) -> anyhow::Result<()> {
+    let mut guard = audio_frame_tx_slot()
+        .lock()
+        .map_err(|_| anyhow!("failed to lock audio frame sender slot"))?;
+    if guard.is_some() {
+        bail!("sender loop already running");
+    }
+    *guard = Some(tx);
+    Ok(())
+}
+
+fn clear_audio_frame_tx() {
+    if let Ok(mut guard) = audio_frame_tx_slot().lock() {
+        *guard = None;
+    }
+}
+
 struct FrameIngressGuard;
 
 impl Drop for FrameIngressGuard {
     fn drop(&mut self) {
         clear_hevc_frame_tx();
+        clear_audio_frame_tx();
     }
 }
 
@@ -152,6 +179,10 @@ async fn send_sender_frame(
     let frame = VideoFrame::nal(payload, unix_us_now(), is_keyframe);
     match sender.send_frame(stream_id, frame).await {
         Ok(frame_index) => {
+            println!(
+                "DEBUG: Sankaku sender sent VIDEO packet: stream_id={} frame_index={} bytes={} keyframe={} dest={}",
+                stream_id, frame_index, payload_len, is_keyframe, dest
+            );
             if !*handshake_announced {
                 *handshake_announced = true;
                 let session_id = sender.session_id().unwrap_or_default();
@@ -190,6 +221,9 @@ async fn send_sender_frame(
                     },
                 );
             }
+            if let Some(bitrate_bps) = sender.take_bitrate_update_bps() {
+                sink_event(sink, UiEvent::BitrateChanged { bitrate_bps });
+            }
             Ok(())
         }
         Err(error) => {
@@ -215,6 +249,11 @@ async fn send_sender_frame(
 }
 
 pub fn push_hevc_frame(frame_bytes: Vec<u8>, is_keyframe: bool) -> anyhow::Result<()> {
+    let frame_len = frame_bytes.len();
+    println!(
+        "DEBUG: Rust received HEVC frame from Dart: {} bytes (keyframe={})",
+        frame_len, is_keyframe
+    );
     let tx = {
         let guard = hevc_frame_tx_slot()
             .lock()
@@ -228,15 +267,35 @@ pub fn push_hevc_frame(frame_bytes: Vec<u8>, is_keyframe: bool) -> anyhow::Resul
     Ok(())
 }
 
+pub fn push_audio_frame(frame_bytes: Vec<u8>) -> anyhow::Result<()> {
+    let frame_len = frame_bytes.len();
+    println!(
+        "DEBUG: Rust received AUDIO frame from Dart: {} bytes",
+        frame_len
+    );
+    let tx = {
+        let guard = audio_frame_tx_slot()
+            .lock()
+            .map_err(|_| anyhow!("failed to lock audio frame sender slot"))?;
+        guard
+            .clone()
+            .context("sender is not active; call start_sankaku_sender first")?
+    };
+    tx.send(frame_bytes)
+        .map_err(|_| anyhow!("sender audio ingress channel is closed"))?;
+    Ok(())
+}
+
 pub fn stop_sankaku_sender() -> anyhow::Result<()> {
     SENDER_SHOULD_RUN.store(false, Ordering::Relaxed);
+    clear_hevc_frame_tx();
+    clear_audio_frame_tx();
     Ok(())
 }
 
 async fn run_sender_loop(
     sink: StreamSink<UiEvent>,
     dest: String,
-    psk_hex: String,
     graph_bytes: Vec<u8>,
 ) -> anyhow::Result<()> {
     sink_event(
@@ -247,8 +306,7 @@ async fn run_sender_loop(
         },
     );
 
-    let psk = parse_psk_hex(&psk_hex)?;
-    let mut sender = SankakuSender::new_with_psk(&dest, psk).await?;
+    let mut sender = SankakuSender::new(&dest).await?;
     sender.update_compression_graph(&graph_bytes)?;
     let local_addr = sender.local_addr()?;
 
@@ -271,6 +329,12 @@ async fn run_sender_loop(
     );
     sink_event(
         &sink,
+        UiEvent::BitrateChanged {
+            bitrate_bps: sender.target_bitrate_bps(),
+        },
+    );
+    sink_event(
+        &sink,
         UiEvent::Telemetry {
             name: "graph_bytes".to_string(),
             value: graph_bytes.len() as u64,
@@ -278,40 +342,19 @@ async fn run_sender_loop(
     );
 
     let (frame_tx, mut frame_rx) = mpsc::unbounded_channel::<(Vec<u8>, bool)>();
+    let (audio_tx, mut audio_rx) = mpsc::unbounded_channel::<Vec<u8>>();
     install_hevc_frame_tx(frame_tx)?;
+    install_audio_frame_tx(audio_tx)?;
     let _frame_ingress_guard = FrameIngressGuard;
 
-    let heartbeat_payload = vec![0x00, 0x00, 0x01, 0x65];
     let mut handshake_announced = false;
-    let mut heartbeat = tokio::time::interval(Duration::from_millis(400));
-    heartbeat.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let mut sent_packets: u64 = 0;
     SENDER_SHOULD_RUN.store(true, Ordering::Relaxed);
     let _sender_run_guard = SenderRunGuard;
 
     loop {
-        if !SENDER_SHOULD_RUN.load(Ordering::Relaxed) {
-            sink_event(
-                &sink,
-                UiEvent::ConnectionState {
-                    state: "stopped".to_string(),
-                    detail: "sender stop requested".to_string(),
-                },
-            );
-            return Ok(());
-        }
-
         tokio::select! {
-            maybe_frame = frame_rx.recv() => {
-                let Some((frame_bytes, is_keyframe)) = maybe_frame else {
-                    sink_event(
-                        &sink,
-                        UiEvent::ConnectionState {
-                            state: "stopped".to_string(),
-                            detail: "sender frame channel closed".to_string(),
-                        },
-                    );
-                    return Ok(());
-                };
+            Some((frame_bytes, is_keyframe)) = frame_rx.recv() => {
                 if frame_bytes.is_empty() {
                     continue;
                 }
@@ -324,26 +367,60 @@ async fn run_sender_loop(
                     &dest,
                     &mut handshake_announced,
                 ).await?;
+                sent_packets = sent_packets.saturating_add(1);
             }
-            _ = heartbeat.tick() => {
-                send_sender_frame(
+            Some(audio_bytes) = audio_rx.recv() => {
+                if audio_bytes.is_empty() {
+                    continue;
+                }
+
+                let audio_len = audio_bytes.len();
+                match sender.send_audio_frame(stream_id, audio_bytes).await {
+                    Ok(_) => {
+                        println!(
+                            "DEBUG: Sankaku sender sent AUDIO packet: stream_id={} bytes={} dest={}",
+                            stream_id, audio_len, dest
+                        );
+                        sent_packets = sent_packets.saturating_add(1);
+                    }
+                    Err(error) => {
+                        sink_event(
+                            &sink,
+                            UiEvent::Error {
+                                msg: format!("audio send failed: {error}"),
+                            },
+                        );
+                    }
+                }
+            }
+            else => {
+                let detail = if SENDER_SHOULD_RUN.load(Ordering::Relaxed) {
+                    "sender ingress channels closed".to_string()
+                } else {
+                    "sender stop requested".to_string()
+                };
+                sink_event(
                     &sink,
-                    &mut sender,
-                    stream_id,
-                    heartbeat_payload.clone(),
-                    false,
-                    &dest,
-                    &mut handshake_announced,
-                ).await?;
+                    UiEvent::ConnectionState {
+                        state: "stopped".to_string(),
+                        detail,
+                    },
+                );
+                break;
             }
         }
+
+        if sent_packets > 0 && sent_packets.is_multiple_of(100) {
+            println!("Sender heartbeat: sent {} packets...", sent_packets);
+        }
     }
+
+    Ok(())
 }
 
 async fn run_receiver_loop(
     sink: StreamSink<UiEvent>,
     bind_addr: String,
-    psk_hex: String,
     graph_bytes: Vec<u8>,
 ) -> anyhow::Result<()> {
     sink_event(
@@ -354,8 +431,7 @@ async fn run_receiver_loop(
         },
     );
 
-    let psk = parse_psk_hex(&psk_hex)?;
-    let mut receiver = SankakuReceiver::new_with_psk(&bind_addr, psk).await?;
+    let mut receiver = SankakuReceiver::new(&bind_addr).await?;
     receiver.update_compression_graph(&graph_bytes)?;
     let local_addr = receiver.local_addr()?;
 
@@ -381,53 +457,93 @@ async fn run_receiver_loop(
         },
     );
 
-    let mut inbound = receiver.spawn_frame_channel();
+    let (mut inbound_video, mut inbound_audio) = receiver.spawn_media_channels();
     let mut handshake_announced = false;
 
-    while let Some(frame) = inbound.recv().await {
-        let session_id = frame.session_id;
-        let stream_id = frame.stream_id;
-        let frame_index = frame.frame_index;
-        let keyframe = frame.keyframe;
-        let payload = frame.payload;
-        let payload_len = payload.len() as u64;
+    loop {
+        tokio::select! {
+            maybe_video = inbound_video.recv() => {
+                let Some(frame) = maybe_video else {
+                    break;
+                };
+                let session_id = frame.session_id;
+                let stream_id = frame.stream_id;
+                let frame_index = frame.frame_index;
+                let keyframe = frame.keyframe;
+                let payload = frame.payload;
+                let payload_len = payload.len() as u64;
 
-        if !handshake_announced {
-            handshake_announced = true;
-            sink_event(&sink, UiEvent::HandshakeInitiated);
-            sink_event(
-                &sink,
-                UiEvent::HandshakeComplete {
-                    session_id,
-                    bootstrap_mode: "Receiver".to_string(),
-                },
-            );
-            sink_event(
-                &sink,
-                UiEvent::ConnectionState {
-                    state: "connected".to_string(),
-                    detail: format!("session={session_id} stream={stream_id}"),
-                },
-            );
+                if !handshake_announced {
+                    handshake_announced = true;
+                    sink_event(&sink, UiEvent::HandshakeInitiated);
+                    sink_event(
+                        &sink,
+                        UiEvent::HandshakeComplete {
+                            session_id,
+                            bootstrap_mode: "Receiver".to_string(),
+                        },
+                    );
+                    sink_event(
+                        &sink,
+                        UiEvent::ConnectionState {
+                            state: "connected".to_string(),
+                            detail: format!("session={session_id} stream={stream_id}"),
+                        },
+                    );
+                }
+
+                sink_event(&sink, UiEvent::VideoFrameReceived { data: payload });
+                sink_event(
+                    &sink,
+                    UiEvent::Progress {
+                        stream_id,
+                        frame_index,
+                        bytes: payload_len,
+                        frames: frame_index.saturating_add(1),
+                    },
+                );
+                sink_event(
+                    &sink,
+                    UiEvent::Telemetry {
+                        name: "keyframe".to_string(),
+                        value: if keyframe { 1 } else { 0 },
+                    },
+                );
+                sink_event(
+                    &sink,
+                    UiEvent::Telemetry {
+                        name: "packet_loss_ppm".to_string(),
+                        value: (frame.packet_loss_ratio.clamp(0.0, 1.0) * 1_000_000.0) as u64,
+                    },
+                );
+            }
+            maybe_audio = inbound_audio.recv() => {
+                let Some(frame) = maybe_audio else {
+                    break;
+                };
+
+                if !handshake_announced {
+                    handshake_announced = true;
+                    sink_event(&sink, UiEvent::HandshakeInitiated);
+                    sink_event(
+                        &sink,
+                        UiEvent::HandshakeComplete {
+                            session_id: frame.session_id,
+                            bootstrap_mode: "Receiver".to_string(),
+                        },
+                    );
+                    sink_event(
+                        &sink,
+                        UiEvent::ConnectionState {
+                            state: "connected".to_string(),
+                            detail: format!("session={} stream={}", frame.session_id, frame.stream_id),
+                        },
+                    );
+                }
+
+                sink_event(&sink, UiEvent::AudioFrameReceived { data: frame.payload });
+            }
         }
-
-        sink_event(&sink, UiEvent::VideoFrameReceived { data: payload });
-        sink_event(
-            &sink,
-            UiEvent::Progress {
-                stream_id,
-                frame_index,
-                bytes: payload_len,
-                frames: frame_index.saturating_add(1),
-            },
-        );
-        sink_event(
-            &sink,
-            UiEvent::Telemetry {
-                name: "keyframe".to_string(),
-                value: if keyframe { 1 } else { 0 },
-            },
-        );
     }
 
     sink_event(
@@ -445,7 +561,6 @@ async fn run_receiver_loop(
 pub async fn start_sankaku_sender(
     sink: StreamSink<UiEvent>,
     dest: String,
-    psk_hex: String,
     graph_bytes: Vec<u8>,
 ) -> anyhow::Result<()> {
     spawn_blocking(move || -> anyhow::Result<()> {
@@ -453,7 +568,7 @@ pub async fn start_sankaku_sender(
             .enable_all()
             .build()
             .context("failed to build sender runtime")?;
-        runtime.block_on(run_sender_loop(sink, dest, psk_hex, graph_bytes))
+        runtime.block_on(run_sender_loop(sink, dest, graph_bytes))
     })
     .await
     .context("sender task join failed")?
@@ -463,7 +578,6 @@ pub async fn start_sankaku_sender(
 pub async fn start_sankaku_receiver(
     sink: StreamSink<UiEvent>,
     bind_addr: String,
-    psk_hex: String,
     graph_bytes: Vec<u8>,
 ) -> anyhow::Result<()> {
     spawn_blocking(move || -> anyhow::Result<()> {
@@ -471,7 +585,7 @@ pub async fn start_sankaku_receiver(
             .enable_all()
             .build()
             .context("failed to build receiver runtime")?;
-        runtime.block_on(run_receiver_loop(sink, bind_addr, psk_hex, graph_bytes))
+        runtime.block_on(run_receiver_loop(sink, bind_addr, graph_bytes))
     })
     .await
     .context("receiver task join failed")?

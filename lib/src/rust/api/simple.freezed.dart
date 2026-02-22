@@ -55,7 +55,7 @@ extension UiEventPatterns on UiEvent {
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( UiEvent_Log value)?  log,TResult Function( UiEvent_ConnectionState value)?  connectionState,TResult Function( UiEvent_HandshakeInitiated value)?  handshakeInitiated,TResult Function( UiEvent_HandshakeComplete value)?  handshakeComplete,TResult Function( UiEvent_Progress value)?  progress,TResult Function( UiEvent_Telemetry value)?  telemetry,TResult Function( UiEvent_FrameDrop value)?  frameDrop,TResult Function( UiEvent_Fault value)?  fault,TResult Function( UiEvent_VideoFrameReceived value)?  videoFrameReceived,TResult Function( UiEvent_Error value)?  error,required TResult orElse(),}){
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( UiEvent_Log value)?  log,TResult Function( UiEvent_ConnectionState value)?  connectionState,TResult Function( UiEvent_HandshakeInitiated value)?  handshakeInitiated,TResult Function( UiEvent_HandshakeComplete value)?  handshakeComplete,TResult Function( UiEvent_Progress value)?  progress,TResult Function( UiEvent_Telemetry value)?  telemetry,TResult Function( UiEvent_FrameDrop value)?  frameDrop,TResult Function( UiEvent_Fault value)?  fault,TResult Function( UiEvent_BitrateChanged value)?  bitrateChanged,TResult Function( UiEvent_VideoFrameReceived value)?  videoFrameReceived,TResult Function( UiEvent_AudioFrameReceived value)?  audioFrameReceived,TResult Function( UiEvent_Error value)?  error,required TResult orElse(),}){
 final _that = this;
 switch (_that) {
 case UiEvent_Log() when log != null:
@@ -66,8 +66,10 @@ return handshakeComplete(_that);case UiEvent_Progress() when progress != null:
 return progress(_that);case UiEvent_Telemetry() when telemetry != null:
 return telemetry(_that);case UiEvent_FrameDrop() when frameDrop != null:
 return frameDrop(_that);case UiEvent_Fault() when fault != null:
-return fault(_that);case UiEvent_VideoFrameReceived() when videoFrameReceived != null:
-return videoFrameReceived(_that);case UiEvent_Error() when error != null:
+return fault(_that);case UiEvent_BitrateChanged() when bitrateChanged != null:
+return bitrateChanged(_that);case UiEvent_VideoFrameReceived() when videoFrameReceived != null:
+return videoFrameReceived(_that);case UiEvent_AudioFrameReceived() when audioFrameReceived != null:
+return audioFrameReceived(_that);case UiEvent_Error() when error != null:
 return error(_that);case _:
   return orElse();
 
@@ -86,7 +88,7 @@ return error(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( UiEvent_Log value)  log,required TResult Function( UiEvent_ConnectionState value)  connectionState,required TResult Function( UiEvent_HandshakeInitiated value)  handshakeInitiated,required TResult Function( UiEvent_HandshakeComplete value)  handshakeComplete,required TResult Function( UiEvent_Progress value)  progress,required TResult Function( UiEvent_Telemetry value)  telemetry,required TResult Function( UiEvent_FrameDrop value)  frameDrop,required TResult Function( UiEvent_Fault value)  fault,required TResult Function( UiEvent_VideoFrameReceived value)  videoFrameReceived,required TResult Function( UiEvent_Error value)  error,}){
+@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( UiEvent_Log value)  log,required TResult Function( UiEvent_ConnectionState value)  connectionState,required TResult Function( UiEvent_HandshakeInitiated value)  handshakeInitiated,required TResult Function( UiEvent_HandshakeComplete value)  handshakeComplete,required TResult Function( UiEvent_Progress value)  progress,required TResult Function( UiEvent_Telemetry value)  telemetry,required TResult Function( UiEvent_FrameDrop value)  frameDrop,required TResult Function( UiEvent_Fault value)  fault,required TResult Function( UiEvent_BitrateChanged value)  bitrateChanged,required TResult Function( UiEvent_VideoFrameReceived value)  videoFrameReceived,required TResult Function( UiEvent_AudioFrameReceived value)  audioFrameReceived,required TResult Function( UiEvent_Error value)  error,}){
 final _that = this;
 switch (_that) {
 case UiEvent_Log():
@@ -97,8 +99,10 @@ return handshakeComplete(_that);case UiEvent_Progress():
 return progress(_that);case UiEvent_Telemetry():
 return telemetry(_that);case UiEvent_FrameDrop():
 return frameDrop(_that);case UiEvent_Fault():
-return fault(_that);case UiEvent_VideoFrameReceived():
-return videoFrameReceived(_that);case UiEvent_Error():
+return fault(_that);case UiEvent_BitrateChanged():
+return bitrateChanged(_that);case UiEvent_VideoFrameReceived():
+return videoFrameReceived(_that);case UiEvent_AudioFrameReceived():
+return audioFrameReceived(_that);case UiEvent_Error():
 return error(_that);}
 }
 /// A variant of `map` that fallback to returning `null`.
@@ -113,7 +117,7 @@ return error(_that);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( UiEvent_Log value)?  log,TResult? Function( UiEvent_ConnectionState value)?  connectionState,TResult? Function( UiEvent_HandshakeInitiated value)?  handshakeInitiated,TResult? Function( UiEvent_HandshakeComplete value)?  handshakeComplete,TResult? Function( UiEvent_Progress value)?  progress,TResult? Function( UiEvent_Telemetry value)?  telemetry,TResult? Function( UiEvent_FrameDrop value)?  frameDrop,TResult? Function( UiEvent_Fault value)?  fault,TResult? Function( UiEvent_VideoFrameReceived value)?  videoFrameReceived,TResult? Function( UiEvent_Error value)?  error,}){
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( UiEvent_Log value)?  log,TResult? Function( UiEvent_ConnectionState value)?  connectionState,TResult? Function( UiEvent_HandshakeInitiated value)?  handshakeInitiated,TResult? Function( UiEvent_HandshakeComplete value)?  handshakeComplete,TResult? Function( UiEvent_Progress value)?  progress,TResult? Function( UiEvent_Telemetry value)?  telemetry,TResult? Function( UiEvent_FrameDrop value)?  frameDrop,TResult? Function( UiEvent_Fault value)?  fault,TResult? Function( UiEvent_BitrateChanged value)?  bitrateChanged,TResult? Function( UiEvent_VideoFrameReceived value)?  videoFrameReceived,TResult? Function( UiEvent_AudioFrameReceived value)?  audioFrameReceived,TResult? Function( UiEvent_Error value)?  error,}){
 final _that = this;
 switch (_that) {
 case UiEvent_Log() when log != null:
@@ -124,8 +128,10 @@ return handshakeComplete(_that);case UiEvent_Progress() when progress != null:
 return progress(_that);case UiEvent_Telemetry() when telemetry != null:
 return telemetry(_that);case UiEvent_FrameDrop() when frameDrop != null:
 return frameDrop(_that);case UiEvent_Fault() when fault != null:
-return fault(_that);case UiEvent_VideoFrameReceived() when videoFrameReceived != null:
-return videoFrameReceived(_that);case UiEvent_Error() when error != null:
+return fault(_that);case UiEvent_BitrateChanged() when bitrateChanged != null:
+return bitrateChanged(_that);case UiEvent_VideoFrameReceived() when videoFrameReceived != null:
+return videoFrameReceived(_that);case UiEvent_AudioFrameReceived() when audioFrameReceived != null:
+return audioFrameReceived(_that);case UiEvent_Error() when error != null:
 return error(_that);case _:
   return null;
 
@@ -143,7 +149,7 @@ return error(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String msg)?  log,TResult Function( String state,  String detail)?  connectionState,TResult Function()?  handshakeInitiated,TResult Function( BigInt sessionId,  String bootstrapMode)?  handshakeComplete,TResult Function( int streamId,  BigInt frameIndex,  BigInt bytes,  BigInt frames)?  progress,TResult Function( String name,  BigInt value)?  telemetry,TResult Function( int streamId,  String reason)?  frameDrop,TResult Function( String code,  String message)?  fault,TResult Function( Uint8List data)?  videoFrameReceived,TResult Function( String msg)?  error,required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String msg)?  log,TResult Function( String state,  String detail)?  connectionState,TResult Function()?  handshakeInitiated,TResult Function( BigInt sessionId,  String bootstrapMode)?  handshakeComplete,TResult Function( int streamId,  BigInt frameIndex,  BigInt bytes,  BigInt frames)?  progress,TResult Function( String name,  BigInt value)?  telemetry,TResult Function( int streamId,  String reason)?  frameDrop,TResult Function( String code,  String message)?  fault,TResult Function( int bitrateBps)?  bitrateChanged,TResult Function( Uint8List data)?  videoFrameReceived,TResult Function( Uint8List data)?  audioFrameReceived,TResult Function( String msg)?  error,required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case UiEvent_Log() when log != null:
 return log(_that.msg);case UiEvent_ConnectionState() when connectionState != null:
@@ -153,8 +159,10 @@ return handshakeComplete(_that.sessionId,_that.bootstrapMode);case UiEvent_Progr
 return progress(_that.streamId,_that.frameIndex,_that.bytes,_that.frames);case UiEvent_Telemetry() when telemetry != null:
 return telemetry(_that.name,_that.value);case UiEvent_FrameDrop() when frameDrop != null:
 return frameDrop(_that.streamId,_that.reason);case UiEvent_Fault() when fault != null:
-return fault(_that.code,_that.message);case UiEvent_VideoFrameReceived() when videoFrameReceived != null:
-return videoFrameReceived(_that.data);case UiEvent_Error() when error != null:
+return fault(_that.code,_that.message);case UiEvent_BitrateChanged() when bitrateChanged != null:
+return bitrateChanged(_that.bitrateBps);case UiEvent_VideoFrameReceived() when videoFrameReceived != null:
+return videoFrameReceived(_that.data);case UiEvent_AudioFrameReceived() when audioFrameReceived != null:
+return audioFrameReceived(_that.data);case UiEvent_Error() when error != null:
 return error(_that.msg);case _:
   return orElse();
 
@@ -173,7 +181,7 @@ return error(_that.msg);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String msg)  log,required TResult Function( String state,  String detail)  connectionState,required TResult Function()  handshakeInitiated,required TResult Function( BigInt sessionId,  String bootstrapMode)  handshakeComplete,required TResult Function( int streamId,  BigInt frameIndex,  BigInt bytes,  BigInt frames)  progress,required TResult Function( String name,  BigInt value)  telemetry,required TResult Function( int streamId,  String reason)  frameDrop,required TResult Function( String code,  String message)  fault,required TResult Function( Uint8List data)  videoFrameReceived,required TResult Function( String msg)  error,}) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String msg)  log,required TResult Function( String state,  String detail)  connectionState,required TResult Function()  handshakeInitiated,required TResult Function( BigInt sessionId,  String bootstrapMode)  handshakeComplete,required TResult Function( int streamId,  BigInt frameIndex,  BigInt bytes,  BigInt frames)  progress,required TResult Function( String name,  BigInt value)  telemetry,required TResult Function( int streamId,  String reason)  frameDrop,required TResult Function( String code,  String message)  fault,required TResult Function( int bitrateBps)  bitrateChanged,required TResult Function( Uint8List data)  videoFrameReceived,required TResult Function( Uint8List data)  audioFrameReceived,required TResult Function( String msg)  error,}) {final _that = this;
 switch (_that) {
 case UiEvent_Log():
 return log(_that.msg);case UiEvent_ConnectionState():
@@ -183,8 +191,10 @@ return handshakeComplete(_that.sessionId,_that.bootstrapMode);case UiEvent_Progr
 return progress(_that.streamId,_that.frameIndex,_that.bytes,_that.frames);case UiEvent_Telemetry():
 return telemetry(_that.name,_that.value);case UiEvent_FrameDrop():
 return frameDrop(_that.streamId,_that.reason);case UiEvent_Fault():
-return fault(_that.code,_that.message);case UiEvent_VideoFrameReceived():
-return videoFrameReceived(_that.data);case UiEvent_Error():
+return fault(_that.code,_that.message);case UiEvent_BitrateChanged():
+return bitrateChanged(_that.bitrateBps);case UiEvent_VideoFrameReceived():
+return videoFrameReceived(_that.data);case UiEvent_AudioFrameReceived():
+return audioFrameReceived(_that.data);case UiEvent_Error():
 return error(_that.msg);}
 }
 /// A variant of `when` that fallback to returning `null`
@@ -199,7 +209,7 @@ return error(_that.msg);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String msg)?  log,TResult? Function( String state,  String detail)?  connectionState,TResult? Function()?  handshakeInitiated,TResult? Function( BigInt sessionId,  String bootstrapMode)?  handshakeComplete,TResult? Function( int streamId,  BigInt frameIndex,  BigInt bytes,  BigInt frames)?  progress,TResult? Function( String name,  BigInt value)?  telemetry,TResult? Function( int streamId,  String reason)?  frameDrop,TResult? Function( String code,  String message)?  fault,TResult? Function( Uint8List data)?  videoFrameReceived,TResult? Function( String msg)?  error,}) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String msg)?  log,TResult? Function( String state,  String detail)?  connectionState,TResult? Function()?  handshakeInitiated,TResult? Function( BigInt sessionId,  String bootstrapMode)?  handshakeComplete,TResult? Function( int streamId,  BigInt frameIndex,  BigInt bytes,  BigInt frames)?  progress,TResult? Function( String name,  BigInt value)?  telemetry,TResult? Function( int streamId,  String reason)?  frameDrop,TResult? Function( String code,  String message)?  fault,TResult? Function( int bitrateBps)?  bitrateChanged,TResult? Function( Uint8List data)?  videoFrameReceived,TResult? Function( Uint8List data)?  audioFrameReceived,TResult? Function( String msg)?  error,}) {final _that = this;
 switch (_that) {
 case UiEvent_Log() when log != null:
 return log(_that.msg);case UiEvent_ConnectionState() when connectionState != null:
@@ -209,8 +219,10 @@ return handshakeComplete(_that.sessionId,_that.bootstrapMode);case UiEvent_Progr
 return progress(_that.streamId,_that.frameIndex,_that.bytes,_that.frames);case UiEvent_Telemetry() when telemetry != null:
 return telemetry(_that.name,_that.value);case UiEvent_FrameDrop() when frameDrop != null:
 return frameDrop(_that.streamId,_that.reason);case UiEvent_Fault() when fault != null:
-return fault(_that.code,_that.message);case UiEvent_VideoFrameReceived() when videoFrameReceived != null:
-return videoFrameReceived(_that.data);case UiEvent_Error() when error != null:
+return fault(_that.code,_that.message);case UiEvent_BitrateChanged() when bitrateChanged != null:
+return bitrateChanged(_that.bitrateBps);case UiEvent_VideoFrameReceived() when videoFrameReceived != null:
+return videoFrameReceived(_that.data);case UiEvent_AudioFrameReceived() when audioFrameReceived != null:
+return audioFrameReceived(_that.data);case UiEvent_Error() when error != null:
 return error(_that.msg);case _:
   return null;
 
@@ -732,6 +744,72 @@ as String,
 /// @nodoc
 
 
+class UiEvent_BitrateChanged extends UiEvent {
+  const UiEvent_BitrateChanged({required this.bitrateBps}): super._();
+  
+
+ final  int bitrateBps;
+
+/// Create a copy of UiEvent
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$UiEvent_BitrateChangedCopyWith<UiEvent_BitrateChanged> get copyWith => _$UiEvent_BitrateChangedCopyWithImpl<UiEvent_BitrateChanged>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is UiEvent_BitrateChanged&&(identical(other.bitrateBps, bitrateBps) || other.bitrateBps == bitrateBps));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,bitrateBps);
+
+@override
+String toString() {
+  return 'UiEvent.bitrateChanged(bitrateBps: $bitrateBps)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $UiEvent_BitrateChangedCopyWith<$Res> implements $UiEventCopyWith<$Res> {
+  factory $UiEvent_BitrateChangedCopyWith(UiEvent_BitrateChanged value, $Res Function(UiEvent_BitrateChanged) _then) = _$UiEvent_BitrateChangedCopyWithImpl;
+@useResult
+$Res call({
+ int bitrateBps
+});
+
+
+
+
+}
+/// @nodoc
+class _$UiEvent_BitrateChangedCopyWithImpl<$Res>
+    implements $UiEvent_BitrateChangedCopyWith<$Res> {
+  _$UiEvent_BitrateChangedCopyWithImpl(this._self, this._then);
+
+  final UiEvent_BitrateChanged _self;
+  final $Res Function(UiEvent_BitrateChanged) _then;
+
+/// Create a copy of UiEvent
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? bitrateBps = null,}) {
+  return _then(UiEvent_BitrateChanged(
+bitrateBps: null == bitrateBps ? _self.bitrateBps : bitrateBps // ignore: cast_nullable_to_non_nullable
+as int,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
 class UiEvent_VideoFrameReceived extends UiEvent {
   const UiEvent_VideoFrameReceived({required this.data}): super._();
   
@@ -787,6 +865,72 @@ class _$UiEvent_VideoFrameReceivedCopyWithImpl<$Res>
 /// with the given fields replaced by the non-null parameter values.
 @pragma('vm:prefer-inline') $Res call({Object? data = null,}) {
   return _then(UiEvent_VideoFrameReceived(
+data: null == data ? _self.data : data // ignore: cast_nullable_to_non_nullable
+as Uint8List,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class UiEvent_AudioFrameReceived extends UiEvent {
+  const UiEvent_AudioFrameReceived({required this.data}): super._();
+  
+
+ final  Uint8List data;
+
+/// Create a copy of UiEvent
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$UiEvent_AudioFrameReceivedCopyWith<UiEvent_AudioFrameReceived> get copyWith => _$UiEvent_AudioFrameReceivedCopyWithImpl<UiEvent_AudioFrameReceived>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is UiEvent_AudioFrameReceived&&const DeepCollectionEquality().equals(other.data, data));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,const DeepCollectionEquality().hash(data));
+
+@override
+String toString() {
+  return 'UiEvent.audioFrameReceived(data: $data)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $UiEvent_AudioFrameReceivedCopyWith<$Res> implements $UiEventCopyWith<$Res> {
+  factory $UiEvent_AudioFrameReceivedCopyWith(UiEvent_AudioFrameReceived value, $Res Function(UiEvent_AudioFrameReceived) _then) = _$UiEvent_AudioFrameReceivedCopyWithImpl;
+@useResult
+$Res call({
+ Uint8List data
+});
+
+
+
+
+}
+/// @nodoc
+class _$UiEvent_AudioFrameReceivedCopyWithImpl<$Res>
+    implements $UiEvent_AudioFrameReceivedCopyWith<$Res> {
+  _$UiEvent_AudioFrameReceivedCopyWithImpl(this._self, this._then);
+
+  final UiEvent_AudioFrameReceived _self;
+  final $Res Function(UiEvent_AudioFrameReceived) _then;
+
+/// Create a copy of UiEvent
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? data = null,}) {
+  return _then(UiEvent_AudioFrameReceived(
 data: null == data ? _self.data : data // ignore: cast_nullable_to_non_nullable
 as Uint8List,
   ));

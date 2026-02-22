@@ -36,6 +36,8 @@ PODS:
   - Flutter (1.0.0)
   - integration_test (0.0.1):
     - Flutter
+  - nsd_ios (0.0.1):
+    - Flutter
   - rust_lib_nomikai (0.0.1):
     - Flutter
   - SDWebImage (5.21.6):
@@ -47,6 +49,7 @@ DEPENDENCIES:
   - file_picker (from `.symlinks/plugins/file_picker/ios`)
   - Flutter (from `Flutter`)
   - integration_test (from `.symlinks/plugins/integration_test/ios`)
+  - nsd_ios (from `.symlinks/plugins/nsd_ios/ios`)
   - rust_lib_nomikai (from `.symlinks/plugins/rust_lib_nomikai/ios`)
 
 SPEC REPOS:
@@ -63,6 +66,8 @@ EXTERNAL SOURCES:
     :path: Flutter
   integration_test:
     :path: ".symlinks/plugins/integration_test/ios"
+  nsd_ios:
+    :path: ".symlinks/plugins/nsd_ios/ios"
   rust_lib_nomikai:
     :path: ".symlinks/plugins/rust_lib_nomikai/ios"
 
@@ -72,6 +77,7 @@ SPEC CHECKSUMS:
   file_picker: a0560bc09d61de87f12d246fc47d2119e6ef37be
   Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
   integration_test: 4a889634ef21a45d28d50d622cf412dc6d9f586e
+  nsd_ios: 596ad79109ddd3e52d665f650f36428049e3653e
   rust_lib_nomikai: 97a57dbea18436911d92c6bb3919b5a813f6115a
   SDWebImage: 1bb6a1b84b6fe87b972a102bdc77dd589df33477
   SwiftyGif: 706c60cf65fa2bc5ee0313beece843c8eb8194d4

@@ -28,10 +28,16 @@
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_nomikai._udp</string>
+	</array>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Nomikai needs local network access to discover and transfer files to nearby Kyu2 mesh nodes.</string>
+	<string>Nomikai needs local network access to discover nearby Sankaku receivers and stream live video.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Nomikai uses the camera to test hardware HEVC video capture and encoding.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Nomikai uses the microphone to capture AAC audio during live Sankaku broadcasts.</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UIFileSharingEnabled</key>

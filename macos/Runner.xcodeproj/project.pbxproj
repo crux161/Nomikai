@@ -26,7 +26,9 @@
 		33CC10F12044A3C60003C045 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33CC10F02044A3C60003C045 /* AppDelegate.swift */; };
 		33CC10F32044A3C60003C045 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 33CC10F22044A3C60003C045 /* Assets.xcassets */; };
 		33CC10F62044A3C60003C045 /* MainMenu.xib in Resources */ = {isa = PBXBuildFile; fileRef = 33CC10F42044A3C60003C045 /* MainMenu.xib */; };
-		33CC11132044BFA00003C045 /* MainFlutterWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33CC11122044BFA00003C045 /* MainFlutterWindow.swift */; };
+			33CC11132044BFA00003C045 /* MainFlutterWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33CC11122044BFA00003C045 /* MainFlutterWindow.swift */; };
+			A1F0B0032F70000100ABCDEF /* AudioPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1F0B0042F70000100ABCDEF /* AudioPlayer.swift */; };
+			A1F0B0012F70000100ABCDEF /* HevcPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1F0B0022F70000100ABCDEF /* HevcPlayer.swift */; };
 		CD608822CCFCA4399414A59F /* Pods_RunnerTests.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 540F1940D408684F8E5864D0 /* Pods_RunnerTests.framework */; };
 		FB790B352F46DBD100FF3A05 /* dummy.cpp in Sources */ = {isa = PBXBuildFile; fileRef = FB790B342F46DBD100FF3A05 /* dummy.cpp */; };
 		FFF4F918E16BE63E4C73D40A /* Pods_Runner.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4F46CDD8A8134855BC40DDF0 /* Pods_Runner.framework */; };
@@ -73,7 +75,9 @@
 		33CC10F22044A3C60003C045 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Assets.xcassets; path = Runner/Assets.xcassets; sourceTree = "<group>"; };
 		33CC10F52044A3C60003C045 /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.xib; name = Base; path = Base.lproj/MainMenu.xib; sourceTree = "<group>"; };
 		33CC10F72044A3C60003C045 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; name = Info.plist; path = Runner/Info.plist; sourceTree = "<group>"; };
-		33CC11122044BFA00003C045 /* MainFlutterWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainFlutterWindow.swift; sourceTree = "<group>"; };
+			33CC11122044BFA00003C045 /* MainFlutterWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainFlutterWindow.swift; sourceTree = "<group>"; };
+			A1F0B0042F70000100ABCDEF /* AudioPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioPlayer.swift; sourceTree = "<group>"; };
+			A1F0B0022F70000100ABCDEF /* HevcPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HevcPlayer.swift; sourceTree = "<group>"; };
 		33CEB47222A05771004F2AC0 /* Flutter-Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "Flutter-Debug.xcconfig"; sourceTree = "<group>"; };
 		33CEB47422A05771004F2AC0 /* Flutter-Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "Flutter-Release.xcconfig"; sourceTree = "<group>"; };
 		33CEB47722A0578A004F2AC0 /* Flutter-Generated.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = "Flutter-Generated.xcconfig"; path = "ephemeral/Flutter-Generated.xcconfig"; sourceTree = "<group>"; };
@@ -179,9 +183,11 @@
 		};
 		33FAB671232836740065AC1E /* Runner */ = {
 			isa = PBXGroup;
-			children = (
-				33CC10F02044A3C60003C045 /* AppDelegate.swift */,
-				33CC11122044BFA00003C045 /* MainFlutterWindow.swift */,
+				children = (
+					33CC10F02044A3C60003C045 /* AppDelegate.swift */,
+					A1F0B0042F70000100ABCDEF /* AudioPlayer.swift */,
+					A1F0B0022F70000100ABCDEF /* HevcPlayer.swift */,
+					33CC11122044BFA00003C045 /* MainFlutterWindow.swift */,
 				33E51913231747F40026EE4D /* DebugProfile.entitlements */,
 				33E51914231749380026EE4D /* Release.entitlements */,
 				33CC11242044D66E0003C045 /* Resources */,
@@ -440,10 +446,12 @@
 		33CC10E92044A3C60003C045 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
-			files = (
-				33CC11132044BFA00003C045 /* MainFlutterWindow.swift in Sources */,
-				33CC10F12044A3C60003C045 /* AppDelegate.swift in Sources */,
-				FB790B352F46DBD100FF3A05 /* dummy.cpp in Sources */,
+				files = (
+					33CC11132044BFA00003C045 /* MainFlutterWindow.swift in Sources */,
+					33CC10F12044A3C60003C045 /* AppDelegate.swift in Sources */,
+					A1F0B0032F70000100ABCDEF /* AudioPlayer.swift in Sources */,
+					A1F0B0012F70000100ABCDEF /* HevcPlayer.swift in Sources */,
+					FB790B352F46DBD100FF3A05 /* dummy.cpp in Sources */,
 				335BBD1B22A9A15E00E9071D /* GeneratedPluginRegistrant.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
