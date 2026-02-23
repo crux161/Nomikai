@@ -190,7 +190,9 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
         return
       }
 
-      self.captureSession.stopRunning()
+      if self.captureSession.isRunning {
+        self.captureSession.stopRunning()
+      }
 
       if let compressionSession = self.compressionSession {
         VTCompressionSessionCompleteFrames(compressionSession, untilPresentationTimeStamp: CMTime.invalid)
@@ -205,6 +207,10 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
       self.audioOutputFormat = nil
       self.audioConverterError = nil
       self.isRecording = false
+      try? AVAudioSession.sharedInstance().setActive(
+        false,
+        options: .notifyOthersOnDeactivation
+      )
 
       DispatchQueue.main.async {
         completion(nil)
@@ -388,6 +394,7 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
 
   private func handleEncodedSampleBuffer(_ sampleBuffer: CMSampleBuffer) {
     guard CMSampleBufferDataIsReady(sampleBuffer) else { return }
+    let ptsUs = Self.microseconds(from: CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
 
     let keyframe = isKeyFrame(sampleBuffer)
     var annexBFrame = Data()
@@ -399,15 +406,16 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
     appendAnnexBNALUnits(from: blockBuffer, to: &annexBFrame)
 
     guard !annexBFrame.isEmpty else { return }
-    emitFrame(annexBFrame, isKeyframe: keyframe)
+    emitFrame(annexBFrame, isKeyframe: keyframe, ptsUs: ptsUs)
   }
 
-  private func emitFrame(_ data: Data, isKeyframe: Bool) {
+  private func emitFrame(_ data: Data, isKeyframe: Bool, ptsUs: UInt64) {
     DispatchQueue.main.async { [weak self] in
       guard let eventSink = self?.videoEventSink else { return }
       eventSink([
         "bytes": FlutterStandardTypedData(bytes: data),
         "is_keyframe": isKeyframe,
+        "pts": NSNumber(value: ptsUs),
       ])
     }
   }
@@ -471,6 +479,7 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
 
   private func handleAudioSampleBuffer(_ sampleBuffer: CMSampleBuffer) {
     guard CMSampleBufferDataIsReady(sampleBuffer) else { return }
+    let ptsUs = Self.microseconds(from: CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
 
     do {
       let converter = try ensureAudioConverter(for: sampleBuffer)
@@ -482,7 +491,7 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
         return
       }
 
-      emitAudioFrame(aacBytes)
+      emitAudioFrame(aacBytes, ptsUs: ptsUs)
     } catch {
       if let dumpError = error as? HevcDumperError {
         audioConverterError = dumpError
@@ -491,11 +500,34 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
     }
   }
 
-  private func emitAudioFrame(_ data: Data) {
+  private func emitAudioFrame(_ data: Data, ptsUs: UInt64) {
     DispatchQueue.main.async { [weak self] in
       guard let eventSink = self?.audioEventSink else { return }
-      eventSink(FlutterStandardTypedData(bytes: data))
+      eventSink([
+        "bytes": FlutterStandardTypedData(bytes: data),
+        "pts": NSNumber(value: ptsUs),
+      ])
     }
+  }
+
+  private static func microseconds(from time: CMTime) -> UInt64 {
+    guard time.isValid, time.isNumeric, time.timescale != 0 else {
+      return 0
+    }
+
+    let scaled = CMTimeConvertScale(
+      time,
+      timescale: 1_000_000,
+      method: .default
+    )
+    guard scaled.isValid, scaled.isNumeric else {
+      return 0
+    }
+
+    if scaled.value <= 0 {
+      return 0
+    }
+    return UInt64(scaled.value)
   }
 
   private func ensureAudioConverter(for sampleBuffer: CMSampleBuffer) throws -> AVAudioConverter {

@@ -77,8 +77,9 @@ class HevcDumperService {
         (dynamic event) {
           if (event is Map) {
             final bytesLength = _decodeBytes(event['bytes'])?.length ?? 0;
+            final ptsUs = _decodePts(event['pts']) ?? 0;
             print(
-              'DEBUG: Dart received VIDEO chunk: $bytesLength bytes (Keyframe: ${event['is_keyframe']})',
+              'DEBUG: Dart received VIDEO chunk: $bytesLength bytes (Keyframe: ${event['is_keyframe']}, pts_us=$ptsUs)',
             );
           } else {
             print('DEBUG: Dart received VIDEO chunk: 0 bytes (Keyframe: null)');
@@ -96,20 +97,21 @@ class HevcDumperService {
       return;
     }
 
-    _audioStreamSubscription = _audioStreamChannel
-        .receiveBroadcastStream()
-        .listen(
-          (dynamic event) {
-            final bytes = _decodeBytes(event);
-            final bytesLength = bytes?.length ?? 0;
-            print('DEBUG: Dart received AUDIO chunk: $bytesLength bytes');
-            _handleAudioPayload(event);
-          },
-          onError: (Object error, StackTrace stackTrace) {
-            debugPrint('Audio stream error: $error');
-          },
-          cancelOnError: false,
+    _audioStreamSubscription = _audioStreamChannel.receiveBroadcastStream().listen(
+      (dynamic event) {
+        final audioEvent = _decodeAudioFrameEvent(event);
+        final bytesLength = audioEvent?.bytes.length ?? 0;
+        final ptsUs = audioEvent?.ptsUs ?? 0;
+        print(
+          'DEBUG: Dart received AUDIO chunk: $bytesLength bytes (pts_us=$ptsUs)',
         );
+        _handleAudioPayload(event);
+      },
+      onError: (Object error, StackTrace stackTrace) {
+        debugPrint('Audio stream error: $error');
+      },
+      cancelOnError: false,
+    );
   }
 
   Future<void> _cancelStreamSubscriptions() async {
@@ -129,6 +131,7 @@ class HevcDumperService {
       pushHevcFrame(
         frameBytes: frameEvent.bytes,
         isKeyframe: frameEvent.isKeyframe,
+        pts: BigInt.from(frameEvent.ptsUs),
       ).catchError((Object error, StackTrace stackTrace) {
         debugPrint('pushHevcFrame failed: $error');
       }),
@@ -140,16 +143,16 @@ class HevcDumperService {
       return;
     }
 
-    final bytes = _decodeBytes(event);
-    if (bytes == null || bytes.isEmpty) {
+    final audioEvent = _decodeAudioFrameEvent(event);
+    if (audioEvent == null || audioEvent.bytes.isEmpty) {
       return;
     }
 
     unawaited(
-      pushAudioFrame(frameBytes: bytes).catchError((
-        Object error,
-        StackTrace stackTrace,
-      ) {
+      pushAudioFrame(
+        frameBytes: audioEvent.bytes,
+        pts: BigInt.from(audioEvent.ptsUs),
+      ).catchError((Object error, StackTrace stackTrace) {
         debugPrint('pushAudioFrame failed: $error');
       }),
     );
@@ -162,13 +165,32 @@ class HevcDumperService {
 
     final rawBytes = event['bytes'];
     final rawIsKeyframe = event['is_keyframe'];
+    final rawPts = event['pts'];
     final bytes = _decodeBytes(rawBytes);
     if (bytes == null) {
       return null;
     }
 
     final isKeyframe = rawIsKeyframe is bool ? rawIsKeyframe : false;
-    return _HevcFrameEvent(bytes: bytes, isKeyframe: isKeyframe);
+    final ptsUs = _decodePts(rawPts) ?? 0;
+    return _HevcFrameEvent(bytes: bytes, isKeyframe: isKeyframe, ptsUs: ptsUs);
+  }
+
+  _AudioFrameEvent? _decodeAudioFrameEvent(dynamic event) {
+    if (event is Map) {
+      final bytes = _decodeBytes(event['bytes']);
+      if (bytes == null) {
+        return null;
+      }
+      final ptsUs = _decodePts(event['pts']) ?? 0;
+      return _AudioFrameEvent(bytes: bytes, ptsUs: ptsUs);
+    }
+
+    final bytes = _decodeBytes(event);
+    if (bytes == null) {
+      return null;
+    }
+    return _AudioFrameEvent(bytes: bytes, ptsUs: 0);
   }
 
   Uint8List? _decodeBytes(dynamic event) {
@@ -183,11 +205,33 @@ class HevcDumperService {
     }
     return null;
   }
+
+  int? _decodePts(dynamic value) {
+    if (value is int) {
+      return value;
+    }
+    if (value is num) {
+      return value.toInt();
+    }
+    return null;
+  }
 }
 
 class _HevcFrameEvent {
-  const _HevcFrameEvent({required this.bytes, required this.isKeyframe});
+  const _HevcFrameEvent({
+    required this.bytes,
+    required this.isKeyframe,
+    required this.ptsUs,
+  });
 
   final Uint8List bytes;
   final bool isKeyframe;
+  final int ptsUs;
+}
+
+class _AudioFrameEvent {
+  const _AudioFrameEvent({required this.bytes, required this.ptsUs});
+
+  final Uint8List bytes;
+  final int ptsUs;
 }

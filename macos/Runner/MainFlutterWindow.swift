@@ -12,9 +12,9 @@ private enum HevcPlayerChannelError: LocalizedError {
   var errorDescription: String? {
     switch self {
     case .invalidArguments:
-      return "Invalid decode_frame arguments. Expected bytes payload."
+      return "Invalid decode_frame arguments. Expected bytes payload (and optional pts)."
     case .invalidAudioArguments:
-      return "Invalid push_audio_frame arguments. Expected bytes payload."
+      return "Invalid push_audio_frame arguments. Expected bytes payload (and optional pts)."
     case .textureRegistryUnavailable:
       return "Flutter texture registry is unavailable."
     case .playerNotInitialized:
@@ -32,6 +32,7 @@ private extension FlutterEngine {
 }
 
 class MainFlutterWindow: NSWindow {
+  private let playbackSyncClock = PlaybackSyncClock()
   private var hevcPlayer: HevcPlayer?
   private var hevcTextureId: Int64?
   private var audioPlayer: AudioPlayer?
@@ -84,12 +85,12 @@ class MainFlutterWindow: NSWindow {
 
       case "decode_frame":
         do {
-          let typedData = try Self.decodeFramePayload(from: call.arguments)
+          let payload = try Self.decodeFramePayload(from: call.arguments)
           guard let player = self.hevcPlayer else {
             throw HevcPlayerChannelError.playerNotInitialized
           }
 
-          player.decodeAnnexBFrame(typedData.data)
+          player.decodeAnnexBFrame(payload.data, ptsUs: payload.ptsUs)
           result(nil)
         } catch {
           result(
@@ -113,7 +114,7 @@ class MainFlutterWindow: NSWindow {
     }
 
     let textureRegistry = flutterViewController.engine.textureRegistry
-    let player = HevcPlayer(textureRegistry: textureRegistry)
+    let player = HevcPlayer(textureRegistry: textureRegistry, syncClock: playbackSyncClock)
     let textureId = textureRegistry.register(player)
 
     guard textureId != 0 else {
@@ -127,16 +128,17 @@ class MainFlutterWindow: NSWindow {
     return textureId
   }
 
-  private static func decodeFramePayload(from arguments: Any?) throws -> FlutterStandardTypedData {
+  private static func decodeFramePayload(from arguments: Any?) throws -> (data: Data, ptsUs: UInt64) {
     if let typedData = arguments as? FlutterStandardTypedData {
-      return typedData
+      return (typedData.data, 0)
     }
 
     if
       let args = arguments as? [String: Any],
       let typedData = args["bytes"] as? FlutterStandardTypedData
     {
-      return typedData
+      let ptsUs = Self.decodePtsUs(args["pts"])
+      return (typedData.data, ptsUs)
     }
 
     throw HevcPlayerChannelError.invalidArguments
@@ -180,7 +182,7 @@ class MainFlutterWindow: NSWindow {
           guard let player = self.audioPlayer else {
             throw HevcPlayerChannelError.audioPlayerNotInitialized
           }
-          player.decodeAndPlay(aacData: payload.data)
+          player.decodeAndPlay(aacData: payload.data, ptsUs: payload.ptsUs)
           result(nil)
         } catch {
           result(
@@ -202,23 +204,41 @@ class MainFlutterWindow: NSWindow {
       return
     }
 
-    let player = try AudioPlayer()
+    let player = try AudioPlayer(syncClock: playbackSyncClock)
     try player.start()
     audioPlayer = player
   }
 
-  private static func decodeAudioPayload(from arguments: Any?) throws -> FlutterStandardTypedData {
+  private static func decodeAudioPayload(from arguments: Any?) throws -> (data: Data, ptsUs: UInt64) {
     if let typedData = arguments as? FlutterStandardTypedData {
-      return typedData
+      return (typedData.data, 0)
     }
 
     if
       let args = arguments as? [String: Any],
       let typedData = args["bytes"] as? FlutterStandardTypedData
     {
-      return typedData
+      let ptsUs = Self.decodePtsUs(args["pts"])
+      return (typedData.data, ptsUs)
     }
 
     throw HevcPlayerChannelError.invalidAudioArguments
+  }
+
+  private static func decodePtsUs(_ rawValue: Any?) -> UInt64 {
+    if let value = rawValue as? NSNumber {
+      let int64Value = value.int64Value
+      if int64Value > 0 {
+        return UInt64(int64Value)
+      }
+      return 0
+    }
+    if let value = rawValue as? Int, value > 0 {
+      return UInt64(value)
+    }
+    if let value = rawValue as? Int64, value > 0 {
+      return UInt64(value)
+    }
+    return 0
   }
 }

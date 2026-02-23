@@ -33,7 +33,7 @@ class HevcPlayerService {
     return textureId;
   }
 
-  Future<void> pushFrame(Uint8List bytes) async {
+  Future<void> pushFrame(Uint8List bytes, {required int ptsUs}) async {
     if (!isSupported || bytes.isEmpty) {
       return;
     }
@@ -42,6 +42,9 @@ class HevcPlayerService {
       await initPlayer();
     }
 
-    await _channel.invokeMethod<void>('decode_frame', bytes);
+    await _channel.invokeMethod<void>('decode_frame', <String, Object>{
+      'bytes': bytes,
+      'pts': ptsUs,
+    });
   }
 }

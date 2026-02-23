@@ -102,6 +102,44 @@ class NomikaiDiscoveryService {
     }
   }
 
+  Future<void> restartScanning({
+    bool clear = true,
+    Duration restartDelay = const Duration(milliseconds: 250),
+  }) async {
+    if (!isSupported || _isDisposed) {
+      return;
+    }
+
+    _log('DEBUG: Restarting mDNS scanner to flush stale discovery state...');
+    await stopScanning(clear: clear);
+    if (restartDelay > Duration.zero) {
+      await Future<void>.delayed(restartDelay);
+    }
+    await startScanning();
+  }
+
+  Future<nsd.Service> resolveServiceFresh(nsd.Service service) async {
+    if (!isSupported || _isDisposed) {
+      return service;
+    }
+
+    try {
+      final resolved = await nsd.resolve(service);
+      final hasAddress =
+          resolved.addresses != null && resolved.addresses!.isNotEmpty;
+      if (resolved.port != null && hasAddress) {
+        _serviceByKey[_serviceKey(resolved)] = resolved;
+        _publish();
+      }
+      return resolved;
+    } catch (error) {
+      _log(
+        'DEBUG: Fresh mDNS resolve failed for ${service.name ?? 'unknown'}: $error',
+      );
+      return service;
+    }
+  }
+
   Future<void> dispose() async {
     if (_isDisposed) {
       return;

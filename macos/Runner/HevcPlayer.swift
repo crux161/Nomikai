@@ -22,6 +22,12 @@ private enum HevcPlayerError: LocalizedError {
 }
 
 final class HevcPlayer: NSObject, FlutterTexture {
+  private struct QueuedVideoFrame {
+    let ptsUs: UInt64
+    let data: Data
+    let containsKeyframe: Bool
+  }
+
   private static let decodeCallback: VTDecompressionOutputCallback = {
     outputCallbackRefCon,
     _,
@@ -45,6 +51,7 @@ final class HevcPlayer: NSObject, FlutterTexture {
 
   private let decodeQueue = DispatchQueue(label: "com.nomikai.sankaku.hevc_player.decode")
   private let pixelBufferLock = NSLock()
+  private let syncClock: PlaybackSyncClock
 
   private weak var textureRegistry: FlutterTextureRegistry?
   private var textureId: Int64 = 0
@@ -57,14 +64,19 @@ final class HevcPlayer: NSObject, FlutterTexture {
   private var sps: Data?
   private var pps: Data?
   private var needsSessionRebuild = true
-  private var presentationCounter: Int64 = 0
+  private var renderTimer: DispatchSourceTimer?
+  private var queuedFrames: [QueuedVideoFrame] = []
 
-  init(textureRegistry: FlutterTextureRegistry) {
+  init(textureRegistry: FlutterTextureRegistry, syncClock: PlaybackSyncClock) {
     self.textureRegistry = textureRegistry
+    self.syncClock = syncClock
     super.init()
   }
 
   deinit {
+    renderTimer?.setEventHandler {}
+    renderTimer?.cancel()
+    renderTimer = nil
     teardownDecoderSession()
   }
 
@@ -72,11 +84,11 @@ final class HevcPlayer: NSObject, FlutterTexture {
     self.textureId = textureId
   }
 
-  func decodeAnnexBFrame(_ frameData: Data) {
+  func decodeAnnexBFrame(_ frameData: Data, ptsUs: UInt64 = 0) {
     guard !frameData.isEmpty else { return }
 
     decodeQueue.async { [weak self] in
-      self?.decodeAnnexBFrameOnQueue(frameData)
+      self?.enqueueFrameOnQueue(frameData, ptsUs: ptsUs)
     }
   }
 
@@ -92,7 +104,93 @@ final class HevcPlayer: NSObject, FlutterTexture {
     return Unmanaged.passRetained(pixelBuffer)
   }
 
-  private func decodeAnnexBFrameOnQueue(_ frameData: Data) {
+  private func enqueueFrameOnQueue(_ frameData: Data, ptsUs: UInt64) {
+    let containsKeyframe = containsIrapFrame(frameData)
+    if ptsUs > 0 {
+      NSLog(
+        "HevcPlayer: enqueue frame bytes=%d pts_us=%llu keyframe=%d",
+        frameData.count,
+        ptsUs,
+        containsKeyframe ? 1 : 0
+      )
+    }
+
+    let item = QueuedVideoFrame(ptsUs: ptsUs, data: frameData, containsKeyframe: containsKeyframe)
+    insertQueuedFrame(item)
+    ensureRenderTimerOnQueue()
+    drainQueuedFramesOnQueue()
+  }
+
+  private func insertQueuedFrame(_ item: QueuedVideoFrame) {
+    guard item.ptsUs > 0 else {
+      queuedFrames.append(item)
+      return
+    }
+
+    let insertionIndex: Int =
+      queuedFrames.firstIndex(where: { existing in
+        existing.ptsUs > 0 && existing.ptsUs > item.ptsUs
+      }) ?? queuedFrames.endIndex
+    queuedFrames.insert(item, at: insertionIndex)
+  }
+
+  private func ensureRenderTimerOnQueue() {
+    guard renderTimer == nil else { return }
+
+    let timer = DispatchSource.makeTimerSource(queue: decodeQueue)
+    timer.schedule(deadline: .now(), repeating: .milliseconds(5), leeway: .milliseconds(2))
+    timer.setEventHandler { [weak self] in
+      self?.drainQueuedFramesOnQueue()
+    }
+    renderTimer = timer
+    timer.resume()
+  }
+
+  private func drainQueuedFramesOnQueue() {
+    var drainedCount = 0
+
+    while !queuedFrames.isEmpty {
+      let next = queuedFrames[0]
+
+      if next.ptsUs == 0 {
+        queuedFrames.removeFirst()
+        decodeAnnexBFrameOnQueue(next.data, ptsUs: 0)
+        drainedCount += 1
+        continue
+      }
+
+      if next.containsKeyframe {
+        syncClock.anchorIfNeeded(remotePtsUs: next.ptsUs, source: "first video keyframe")
+      }
+
+      if !syncClock.isAnchored() && !next.containsKeyframe {
+        NSLog(
+          "HevcPlayer: dropping pre-anchor non-keyframe pts_us=%llu (waiting for first keyframe)",
+          next.ptsUs
+        )
+        queuedFrames.removeFirst()
+        continue
+      }
+
+      guard let playablePtsUs = syncClock.playablePtsUpperBoundUs() else {
+        break
+      }
+
+      if next.ptsUs > playablePtsUs {
+        break
+      }
+
+      queuedFrames.removeFirst()
+      decodeAnnexBFrameOnQueue(next.data, ptsUs: next.ptsUs)
+      drainedCount += 1
+
+      if drainedCount >= 8 {
+        break
+      }
+    }
+  }
+
+  private func decodeAnnexBFrameOnQueue(_ frameData: Data, ptsUs: UInt64) {
     let nalUnits = splitAnnexB(frameData)
     guard !nalUnits.isEmpty else {
       return
@@ -131,7 +229,7 @@ final class HevcPlayer: NSObject, FlutterTexture {
     }
 
     for vclNal in vclUnits {
-      decodeVclNalUnit(vclNal)
+      decodeVclNalUnit(vclNal, ptsUs: ptsUs)
     }
   }
 
@@ -233,10 +331,9 @@ final class HevcPlayer: NSObject, FlutterTexture {
     }
 
     formatDescription = nil
-    presentationCounter = 0
   }
 
-  private func decodeVclNalUnit(_ nalUnit: Data) {
+  private func decodeVclNalUnit(_ nalUnit: Data, ptsUs: UInt64) {
     guard
       let decompressionSession,
       let formatDescription
@@ -285,8 +382,7 @@ final class HevcPlayer: NSObject, FlutterTexture {
       return
     }
 
-    let pts = CMTime(value: presentationCounter, timescale: 30)
-    presentationCounter += 1
+    let pts = Self.makePresentationTime(ptsUs: ptsUs)
     var timingInfo = CMSampleTimingInfo(
       duration: CMTime.invalid,
       presentationTimeStamp: pts,
@@ -346,6 +442,25 @@ final class HevcPlayer: NSObject, FlutterTexture {
     }
 
     return (firstByte >> 1) & 0x3F
+  }
+
+  private static func makePresentationTime(ptsUs: UInt64) -> CMTime {
+    guard ptsUs > 0 else {
+      return .zero
+    }
+
+    let clamped = ptsUs > UInt64(Int64.max) ? UInt64(Int64.max) : ptsUs
+    return CMTime(value: Int64(clamped), timescale: 1_000_000)
+  }
+
+  private func containsIrapFrame(_ frameData: Data) -> Bool {
+    for nalUnit in splitAnnexB(frameData) {
+      guard let nalType = Self.nalUnitType(for: nalUnit) else { continue }
+      if (16...21).contains(nalType) {
+        return true
+      }
+    }
+    return false
   }
 
   private func splitAnnexB(_ stream: Data) -> [Data] {

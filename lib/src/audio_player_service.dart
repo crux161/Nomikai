@@ -20,7 +20,7 @@ class AudioPlayerService {
     _initialized = true;
   }
 
-  Future<void> pushAudioFrame(Uint8List bytes) async {
+  Future<void> pushAudioFrame(Uint8List bytes, {required int ptsUs}) async {
     if (!isSupported || bytes.isEmpty) {
       return;
     }
@@ -29,6 +29,9 @@ class AudioPlayerService {
       await initializeAudio();
     }
 
-    await _channel.invokeMethod<void>('push_audio_frame', bytes);
+    await _channel.invokeMethod<void>('push_audio_frame', <String, Object>{
+      'bytes': bytes,
+      'pts': ptsUs,
+    });
   }
 }

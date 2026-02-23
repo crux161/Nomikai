@@ -22,16 +22,25 @@ private enum AudioPlayerError: LocalizedError {
 }
 
 final class AudioPlayer {
+  private struct QueuedAudioFrame {
+    let ptsUs: UInt64
+    let data: Data
+  }
+
   private let playerQueue = DispatchQueue(label: "com.nomikai.sankaku.audio_player.queue")
   private let engine = AVAudioEngine()
   private let playerNode = AVAudioPlayerNode()
+  private let syncClock: PlaybackSyncClock
 
   private let aacFormat: AVAudioFormat
   private let pcmFormat: AVAudioFormat
   private let converter: AVAudioConverter
   private var isStarted = false
+  private var drainTimer: DispatchSourceTimer?
+  private var queuedFrames: [QueuedAudioFrame] = []
 
-  init() throws {
+  init(syncClock: PlaybackSyncClock) throws {
+    self.syncClock = syncClock
     guard
       let aacFormat = AVAudioFormat(
         settings: [
@@ -62,6 +71,12 @@ final class AudioPlayer {
     self.converter = converter
   }
 
+  deinit {
+    drainTimer?.setEventHandler {}
+    drainTimer?.cancel()
+    drainTimer = nil
+  }
+
   func start() throws {
     guard !isStarted else { return }
 
@@ -73,19 +88,85 @@ final class AudioPlayer {
     isStarted = true
   }
 
-  func decodeAndPlay(aacData: Data) {
+  func decodeAndPlay(aacData: Data, ptsUs: UInt64 = 0) {
     guard !aacData.isEmpty else { return }
 
     playerQueue.async { [weak self] in
       guard let self else { return }
-      do {
-        try self.start()
-      } catch {
-        NSLog("AudioPlayer: failed to start audio engine: \(error.localizedDescription)")
-        return
+      self.enqueueAudioFrameOnQueue(aacData, ptsUs: ptsUs)
+    }
+  }
+
+  private func enqueueAudioFrameOnQueue(_ aacData: Data, ptsUs: UInt64) {
+    if ptsUs > 0 {
+      NSLog("AudioPlayer: enqueue frame bytes=%d pts_us=%llu", aacData.count, ptsUs)
+    }
+
+    let item = QueuedAudioFrame(ptsUs: ptsUs, data: aacData)
+    insertQueuedAudioFrame(item)
+    ensureDrainTimerOnQueue()
+    drainQueuedAudioOnQueue()
+  }
+
+  private func insertQueuedAudioFrame(_ item: QueuedAudioFrame) {
+    guard item.ptsUs > 0 else {
+      queuedFrames.append(item)
+      return
+    }
+
+    let insertionIndex: Int =
+      queuedFrames.firstIndex(where: { existing in
+        existing.ptsUs > 0 && existing.ptsUs > item.ptsUs
+      }) ?? queuedFrames.endIndex
+    queuedFrames.insert(item, at: insertionIndex)
+  }
+
+  private func ensureDrainTimerOnQueue() {
+    guard drainTimer == nil else { return }
+
+    let timer = DispatchSource.makeTimerSource(queue: playerQueue)
+    timer.schedule(deadline: .now(), repeating: .milliseconds(5), leeway: .milliseconds(2))
+    timer.setEventHandler { [weak self] in
+      self?.drainQueuedAudioOnQueue()
+    }
+    drainTimer = timer
+    timer.resume()
+  }
+
+  private func drainQueuedAudioOnQueue() {
+    guard !queuedFrames.isEmpty else { return }
+
+    do {
+      try start()
+    } catch {
+      NSLog("AudioPlayer: failed to start audio engine: \(error.localizedDescription)")
+      return
+    }
+
+    var drainedCount = 0
+    while !queuedFrames.isEmpty {
+      let next = queuedFrames[0]
+
+      if next.ptsUs == 0 {
+        queuedFrames.removeFirst()
+        decodeAndSchedule(aacData: next.data)
+        drainedCount += 1
+      } else {
+        guard let playablePtsUs = syncClock.playablePtsUpperBoundUs() else {
+          break
+        }
+        if next.ptsUs > playablePtsUs {
+          break
+        }
+
+        queuedFrames.removeFirst()
+        decodeAndSchedule(aacData: next.data)
+        drainedCount += 1
       }
 
-      self.decodeAndSchedule(aacData: aacData)
+      if drainedCount >= 16 {
+        break
+      }
     }
   }
 

@@ -195,6 +195,11 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
       }
 
       _debugLog('DEBUG: Cancelling previous receiver event subscription...');
+      try {
+        await stopSankakuReceiver();
+      } catch (error) {
+        _debugLog('DEBUG: Receiver stop request before restart failed: $error');
+      }
       await _receiverEventSubscription?.cancel();
       _debugLog('DEBUG: Previous receiver event subscription cancelled.');
 
@@ -291,6 +296,11 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
       _statusLog = 'Stopping receiver...';
     });
 
+    try {
+      await stopSankakuReceiver();
+    } catch (error) {
+      _debugLog('DEBUG: Receiver stop request failed: $error');
+    }
     await _receiverEventSubscription?.cancel();
     _receiverEventSubscription = null;
     _stopMetricsTicker();
@@ -371,7 +381,7 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
               'Sender bitrate updated to ${(bitrateBps / 1_000_000).toStringAsFixed(2)} Mbps';
         });
       },
-      videoFrameReceived: (data) {
+      videoFrameReceived: (data, pts) {
         _bytesSinceTick += data.length;
         _framesSinceTick += 1;
 
@@ -380,7 +390,9 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
         });
 
         unawaited(
-          _playerService.pushFrame(data).catchError((Object error) {
+          _playerService.pushFrame(data, ptsUs: pts.toInt()).catchError((
+            Object error,
+          ) {
             if (!mounted) {
               return;
             }
@@ -391,20 +403,22 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
           }),
         );
       },
-      audioFrameReceived: (data) {
+      audioFrameReceived: (data, pts) {
         if (!_audioPlaybackEnabled) {
           return;
         }
         unawaited(
-          _audioPlayerService.pushAudioFrame(data).catchError((Object error) {
-            if (!mounted) {
-              return;
-            }
-            setState(() {
-              _audioPlaybackEnabled = false;
-              _statusLog = 'Audio playback push failed: $error';
-            });
-          }),
+          _audioPlayerService
+              .pushAudioFrame(data, ptsUs: pts.toInt())
+              .catchError((Object error) {
+                if (!mounted) {
+                  return;
+                }
+                setState(() {
+                  _audioPlaybackEnabled = false;
+                  _statusLog = 'Audio playback push failed: $error';
+                });
+              }),
         );
       },
       error: (msg) {
@@ -631,6 +645,7 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
   @override
   void dispose() {
     _metricsTicker?.cancel();
+    unawaited(stopSankakuReceiver());
     _receiverEventSubscription?.cancel();
     unawaited(_discoveryService.dispose());
     super.dispose();
@@ -773,18 +788,24 @@ class _BroadcastScreenState extends State<BroadcastScreen> {
   final List<String> _debugLines = <String>[];
 
   StreamSubscription<UiEvent>? _senderEventSubscription;
+  Timer? _senderHandshakeTimeoutTimer;
 
   bool _isBroadcasting = false;
   bool _isBusy = false;
   bool _isMicrophoneMuted = false;
   bool _isCaptureActive = false;
   bool _debugConsoleExpanded = false;
+  bool _senderHandshakeCompleted = false;
+  bool _senderFailureRecoveryInFlight = false;
+  bool _discoveryRefreshInFlight = false;
   double _progress = 0.0;
   int _currentBitrateBps = 0;
   String? _activeDestination;
+  nsd.Service? _selectedReceiverService;
   String _statusLog = 'Ready.';
 
   static const int _maxDebugLines = 240;
+  static const Duration _senderHandshakeTimeout = Duration(seconds: 5);
 
   void _debugLog(String message) {
     final String line = '[${DateTime.now().toIso8601String()}] $message';
@@ -804,6 +825,132 @@ class _BroadcastScreenState extends State<BroadcastScreen> {
     setState(() {
       _debugLines.clear();
     });
+  }
+
+  void _cancelSenderHandshakeTimeout() {
+    _senderHandshakeTimeoutTimer?.cancel();
+    _senderHandshakeTimeoutTimer = null;
+  }
+
+  void _armSenderHandshakeTimeout(String destination) {
+    _cancelSenderHandshakeTimeout();
+    if (_senderHandshakeCompleted) {
+      return;
+    }
+
+    _senderHandshakeTimeoutTimer = Timer(_senderHandshakeTimeout, () {
+      unawaited(_handleSenderHandshakeTimeout(destination));
+    });
+    _debugLog(
+      'DEBUG: Sender handshake timeout armed for ${_senderHandshakeTimeout.inSeconds}s (dest=$destination)',
+    );
+  }
+
+  Future<void> _refreshDiscoveryAfterConnectionFailure(String reason) async {
+    if (_discoveryRefreshInFlight || !_discoveryService.isSupported) {
+      return;
+    }
+    _discoveryRefreshInFlight = true;
+    try {
+      _debugLog(
+        'DEBUG: Refreshing mDNS discovery after connection failure: $reason',
+      );
+      await _discoveryService.restartScanning();
+
+      final selected = _selectedReceiverService;
+      if (selected != null) {
+        final refreshed = await _discoveryService.resolveServiceFresh(selected);
+        _selectedReceiverService = refreshed;
+        final refreshedDestination = _destinationFromService(refreshed);
+        if (refreshedDestination != null) {
+          _debugLog(
+            'DEBUG: Fresh mDNS resolve after failure produced destination=$refreshedDestination',
+          );
+        } else {
+          final rawAddresses =
+              refreshed.addresses?.map((entry) => entry.address).join(', ') ??
+              'none';
+          _debugLog(
+            'DEBUG: Fresh mDNS resolve after failure produced no usable destination '
+            '(host=${refreshed.host ?? 'null'} addresses=$rawAddresses port=${refreshed.port})',
+          );
+        }
+      }
+    } catch (error) {
+      _debugLog('DEBUG: mDNS refresh after failure failed: $error');
+    } finally {
+      _discoveryRefreshInFlight = false;
+    }
+  }
+
+  Future<void> _handleSenderHandshakeTimeout(String destination) async {
+    if (!mounted ||
+        _senderHandshakeCompleted ||
+        !_isBroadcasting ||
+        _isBusy ||
+        _senderFailureRecoveryInFlight) {
+      return;
+    }
+
+    _senderFailureRecoveryInFlight = true;
+    _debugLog(
+      'DEBUG: Handshake timeout: no HandshakeComplete received within '
+      '${_senderHandshakeTimeout.inSeconds}s for $destination',
+    );
+
+    await _stopBroadcast(
+      statusOverride:
+          'Handshake timeout after ${_senderHandshakeTimeout.inSeconds}s. Resetting sender and refreshing receiver discovery...',
+    );
+    await _refreshDiscoveryAfterConnectionFailure('handshake timeout');
+
+    if (mounted && !_isBroadcasting) {
+      setState(() {
+        _statusLog =
+            'Handshake timed out. Sender stopped and mDNS was refreshed. Select the receiver again to retry.';
+      });
+    }
+
+    _senderFailureRecoveryInFlight = false;
+  }
+
+  Future<void> _startBroadcastToDiscoveredService(nsd.Service service) async {
+    if (_isBusy || _isBroadcasting) {
+      return;
+    }
+
+    _selectedReceiverService = service;
+    _debugLog(
+      'DEBUG: Performing fresh mDNS resolve before dialing ${service.name ?? 'receiver'}...',
+    );
+
+    try {
+      final resolvedService = await _discoveryService.resolveServiceFresh(
+        service,
+      );
+      final destination = _destinationFromService(resolvedService);
+      if (destination == null) {
+        final rawAddresses =
+            resolvedService.addresses
+                ?.map((entry) => entry.address)
+                .join(', ') ??
+            'none';
+        throw StateError(
+          'Selected receiver is missing a usable resolved address/port '
+          '(host=${resolvedService.host ?? 'null'} addresses=$rawAddresses port=${resolvedService.port}).',
+        );
+      }
+      _selectedReceiverService = resolvedService;
+      await _startBroadcastTo(destination);
+    } catch (error) {
+      _debugLog('DEBUG: Fresh mDNS resolve before dial failed: $error');
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _statusLog = 'Receiver resolve failed: $error';
+      });
+    }
   }
 
   @override
@@ -850,6 +997,9 @@ class _BroadcastScreenState extends State<BroadcastScreen> {
     if (_isBusy || _isBroadcasting) {
       return;
     }
+    _cancelSenderHandshakeTimeout();
+    _senderHandshakeCompleted = false;
+    _senderFailureRecoveryInFlight = false;
     _debugLog('DEBUG: Sender startup requested. destination=$destination');
     setState(() {
       _isBusy = true;
@@ -877,6 +1027,12 @@ class _BroadcastScreenState extends State<BroadcastScreen> {
       _senderEventSubscription = senderEvents.listen(
         _onEngineEvent,
         onError: (Object error) {
+          _cancelSenderHandshakeTimeout();
+          if (!_senderHandshakeCompleted) {
+            unawaited(
+              _refreshDiscoveryAfterConnectionFailure('sender stream error'),
+            );
+          }
           if (!mounted) {
             return;
           }
@@ -917,11 +1073,19 @@ class _BroadcastScreenState extends State<BroadcastScreen> {
             ? 'Broadcast live to $destination.'
             : 'Broadcast control channel live to $destination. Capture unavailable: $audioInitError';
       });
+      _armSenderHandshakeTimeout(destination);
       _debugLog('DEBUG: Sender startup complete.');
     } catch (error) {
       _debugLog('DEBUG: Sender startup failed: $error');
+      _cancelSenderHandshakeTimeout();
       await _senderEventSubscription?.cancel();
       _senderEventSubscription = null;
+
+      if (_selectedReceiverService != null) {
+        unawaited(
+          _refreshDiscoveryAfterConnectionFailure('sender startup failure'),
+        );
+      }
 
       if (!mounted) {
         return;
@@ -940,12 +1104,13 @@ class _BroadcastScreenState extends State<BroadcastScreen> {
     }
   }
 
-  Future<void> _stopBroadcast() async {
+  Future<void> _stopBroadcast({String? statusOverride}) async {
     setState(() {
       _isBusy = true;
       _statusLog = 'Stopping broadcast...';
     });
     _debugLog('DEBUG: Stopping sender broadcast...');
+    _cancelSenderHandshakeTimeout();
 
     Object? stopError;
 
@@ -983,11 +1148,14 @@ class _BroadcastScreenState extends State<BroadcastScreen> {
     setState(() {
       _isBusy = false;
       _isBroadcasting = false;
+      _senderHandshakeCompleted = false;
       _progress = 0.0;
       _activeDestination = null;
-      _statusLog = stopError == null
-          ? 'Broadcast stopped.'
-          : 'Stop completed with warning: $stopError';
+      _statusLog =
+          statusOverride ??
+          (stopError == null
+              ? 'Broadcast stopped.'
+              : 'Stop completed with warning: $stopError');
     });
   }
 
@@ -1005,6 +1173,8 @@ class _BroadcastScreenState extends State<BroadcastScreen> {
         },
         handshakeInitiated: () => _statusLog = 'Handshake initiated...',
         handshakeComplete: (sessionId, bootstrapMode) {
+          _senderHandshakeCompleted = true;
+          _cancelSenderHandshakeTimeout();
           _statusLog =
               'Broadcast connected. Session=$sessionId Mode=$bootstrapMode';
         },
@@ -1017,20 +1187,36 @@ class _BroadcastScreenState extends State<BroadcastScreen> {
         frameDrop: (streamId, reason) {
           _statusLog = 'Frame drop on stream $streamId: $reason';
         },
-        fault: (code, message) => _statusLog = 'FAULT [$code]: $message',
+        fault: (code, message) {
+          if (!_senderHandshakeCompleted) {
+            unawaited(
+              _refreshDiscoveryAfterConnectionFailure('sender fault $code'),
+            );
+          }
+          _statusLog = 'FAULT [$code]: $message';
+        },
         bitrateChanged: (bitrateBps) {
           _currentBitrateBps = bitrateBps;
           bitrateToApply = bitrateBps;
           _statusLog =
               'Adaptive bitrate set to ${(bitrateBps / 1_000_000).toStringAsFixed(2)} Mbps';
         },
-        videoFrameReceived: (data) {
-          _statusLog = 'Preview frame received (${data.length} bytes).';
+        videoFrameReceived: (data, pts) {
+          _statusLog =
+              'Preview frame received (${data.length} bytes, pts=$pts).';
         },
-        audioFrameReceived: (data) {
-          _statusLog = 'Audio packet sent (${data.length} bytes).';
+        audioFrameReceived: (data, pts) {
+          _statusLog = 'Audio packet sent (${data.length} bytes, pts=$pts).';
         },
-        error: (msg) => _statusLog = 'ERROR: $msg',
+        error: (msg) {
+          _cancelSenderHandshakeTimeout();
+          if (!_senderHandshakeCompleted) {
+            unawaited(
+              _refreshDiscoveryAfterConnectionFailure('sender error event'),
+            );
+          }
+          _statusLog = 'ERROR: $msg';
+        },
       );
     });
 
@@ -1049,19 +1235,95 @@ class _BroadcastScreenState extends State<BroadcastScreen> {
   }
 
   String? _destinationFromService(nsd.Service service) {
-    final addresses = service.addresses;
     final port = service.port;
-    if (addresses == null || addresses.isEmpty || port == null) {
+    if (port == null) {
       return null;
     }
 
-    final addressStrings = addresses.map((entry) => entry.address).toList();
-    final host = addressStrings.firstWhere(
-      (value) => value.contains('.'),
-      orElse: () => addressStrings.first,
-    );
+    final host = _selectDialHost(service);
+    if (host == null) {
+      return null;
+    }
+
     final formattedHost = host.contains(':') ? '[$host]' : host;
     return '$formattedHost:$port';
+  }
+
+  String? _selectDialHost(nsd.Service service) {
+    final addresses = service.addresses;
+    final addressStrings = (addresses ?? const <dynamic>[])
+        .map((entry) => entry.address as String)
+        .map(_normalizeHostForDial)
+        .whereType<String>()
+        .toList();
+
+    final usableAddresses = addressStrings
+        .where((address) => _isUsableDialHost(address))
+        .toList();
+
+    final preferredIpv4 = usableAddresses.where((value) => value.contains('.'));
+    if (preferredIpv4.isNotEmpty) {
+      return preferredIpv4.first;
+    }
+
+    final preferredIpv6 = usableAddresses.where(
+      (value) => value.contains(':') && !_isIpv6LinkLocalWithoutScope(value),
+    );
+    if (preferredIpv6.isNotEmpty) {
+      return preferredIpv6.first;
+    }
+
+    if (usableAddresses.isNotEmpty) {
+      return usableAddresses.first;
+    }
+
+    final host = _normalizeHostForDial(service.host);
+    if (host != null && _isUsableDialHost(host)) {
+      return host;
+    }
+
+    return null;
+  }
+
+  String? _normalizeHostForDial(String? raw) {
+    if (raw == null) {
+      return null;
+    }
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) {
+      return null;
+    }
+    return trimmed.endsWith('.')
+        ? trimmed.substring(0, trimmed.length - 1)
+        : trimmed;
+  }
+
+  bool _isUsableDialHost(String host) {
+    final normalized = host.trim().toLowerCase();
+    if (normalized.isEmpty) {
+      return false;
+    }
+
+    const invalidExact = <String>{
+      '0.0.0.0',
+      '::',
+      '::1',
+      '0:0:0:0:0:0:0:0',
+      'localhost',
+      '127.0.0.1',
+    };
+    if (invalidExact.contains(normalized)) {
+      return false;
+    }
+    if (normalized.startsWith('127.')) {
+      return false;
+    }
+    return true;
+  }
+
+  bool _isIpv6LinkLocalWithoutScope(String host) {
+    final normalized = host.toLowerCase();
+    return normalized.startsWith('fe80:') && !normalized.contains('%');
   }
 
   String _serviceLabel(nsd.Service service) {
@@ -1122,13 +1384,12 @@ class _BroadcastScreenState extends State<BroadcastScreen> {
                 ),
                 const SizedBox(height: 12),
                 ...availableServices.map((service) {
-                  final destination = _destinationFromService(service)!;
                   return Padding(
                     padding: const EdgeInsets.only(bottom: 10),
                     child: FilledButton.tonalIcon(
                       onPressed: _isBusy || _isBroadcasting
                           ? null
-                          : () => _startBroadcastTo(destination),
+                          : () => _startBroadcastToDiscoveredService(service),
                       icon: const Icon(Icons.cast),
                       label: Text(_serviceLabel(service)),
                     ),
@@ -1226,6 +1487,7 @@ class _BroadcastScreenState extends State<BroadcastScreen> {
 
   @override
   void dispose() {
+    _cancelSenderHandshakeTimeout();
     _senderEventSubscription?.cancel();
     unawaited(_discoveryService.dispose());
     super.dispose();
