@@ -13,6 +13,13 @@ import 'package:nomikai/src/hevc_player_service.dart';
 import 'package:nomikai/src/rust/api/simple.dart';
 import 'package:nomikai/src/rust/frb_generated.dart';
 import 'package:nsd/nsd.dart' as nsd;
+import 'package:shared_preferences/shared_preferences.dart';
+
+const int _sankakuUdpPort = NomikaiDiscoveryService.defaultSankakuPort;
+const String _sankakuBindHost = '0.0.0.0';
+const String _sankakuReceiverBindAddr = '$_sankakuBindHost:$_sankakuUdpPort';
+const String _manualDialPrefsKey = 'broadcast.manual_destination';
+const String _manualDialPlaceholder = '<Your_Public_IP>:$_sankakuUdpPort';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -157,7 +164,7 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
   }
 
   Future<void> _startReceiver() async {
-    const bindAddr = '0.0.0.0:8080';
+    const bindAddr = _sankakuReceiverBindAddr;
     _debugLog('DEBUG: Receiver startup requested. bindAddr=$bindAddr');
 
     if (!_playerService.isSupported) {
@@ -239,7 +246,7 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
 
       _debugLog('DEBUG: Starting mDNS Broadcast...');
       try {
-        await _discoveryService.startBroadcasting(8080);
+        await _discoveryService.startBroadcasting(_sankakuUdpPort);
         _debugLog('DEBUG: mDNS Broadcast started.');
       } catch (error) {
         _debugLog(
@@ -454,7 +461,7 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
             Text('Receiver', style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 8),
             Text(
-              'Listening on 0.0.0.0:8080 and advertising via mDNS.',
+              'Listening on $_sankakuReceiverBindAddr and advertising via mDNS.',
               style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 12),
@@ -786,6 +793,8 @@ class _BroadcastScreenState extends State<BroadcastScreen> {
   final HevcDumperService _hevcService = HevcDumperService();
   late final NomikaiDiscoveryService _discoveryService;
   final List<String> _debugLines = <String>[];
+  final TextEditingController _manualDestinationController =
+      TextEditingController(text: _manualDialPlaceholder);
 
   StreamSubscription<UiEvent>? _senderEventSubscription;
   Timer? _senderHandshakeTimeoutTimer;
@@ -806,6 +815,33 @@ class _BroadcastScreenState extends State<BroadcastScreen> {
 
   static const int _maxDebugLines = 240;
   static const Duration _senderHandshakeTimeout = Duration(seconds: 5);
+
+  Future<void> _loadManualDestinationPreference() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getString(_manualDialPrefsKey)?.trim();
+      if (saved == null || saved.isEmpty || !mounted) {
+        return;
+      }
+      _manualDestinationController.text = saved;
+      _debugLog('DEBUG: Restored manual destination from preferences: $saved');
+    } catch (error) {
+      _debugLog(
+        'DEBUG: Failed to restore manual destination preference: $error',
+      );
+    }
+  }
+
+  Future<void> _saveManualDestinationPreference(String destination) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_manualDialPrefsKey, destination);
+    } catch (error) {
+      _debugLog(
+        'DEBUG: Failed to persist manual destination preference: $error',
+      );
+    }
+  }
 
   void _debugLog(String message) {
     final String line = '[${DateTime.now().toIso8601String()}] $message';
@@ -914,6 +950,48 @@ class _BroadcastScreenState extends State<BroadcastScreen> {
     _senderFailureRecoveryInFlight = false;
   }
 
+  String? _normalizeManualDestinationInput(String rawValue) {
+    final trimmed = rawValue.trim();
+    if (trimmed.isEmpty) {
+      return null;
+    }
+    if (trimmed.contains('<') || trimmed.contains('>')) {
+      return null;
+    }
+
+    final candidate = trimmed.contains(':')
+        ? trimmed
+        : '$trimmed:$_sankakuUdpPort';
+    final uri = Uri.tryParse('udp://$candidate');
+    if (uri == null || uri.host.isEmpty || uri.port <= 0 || uri.port > 65535) {
+      return null;
+    }
+    return candidate;
+  }
+
+  Future<void> _connectToManualDestination() async {
+    if (_isBusy || _isBroadcasting) {
+      return;
+    }
+
+    final destination = _normalizeManualDestinationInput(
+      _manualDestinationController.text,
+    );
+    if (destination == null) {
+      setState(() {
+        _statusLog =
+            'Enter a valid destination like 203.0.113.45:$_sankakuUdpPort';
+      });
+      return;
+    }
+
+    _manualDestinationController.text = destination;
+    _selectedReceiverService = null;
+    _debugLog('DEBUG: Manual dial requested. destination=$destination');
+    unawaited(_saveManualDestinationPreference(destination));
+    await _startBroadcastTo(destination);
+  }
+
   Future<void> _startBroadcastToDiscoveredService(nsd.Service service) async {
     if (_isBusy || _isBroadcasting) {
       return;
@@ -957,6 +1035,7 @@ class _BroadcastScreenState extends State<BroadcastScreen> {
   void initState() {
     super.initState();
     _discoveryService = NomikaiDiscoveryService(logger: _debugLog);
+    unawaited(_loadManualDestinationPreference());
     _debugLog('DEBUG: Starting mDNS Scanner...');
     unawaited(
       _discoveryService
@@ -1345,6 +1424,55 @@ class _BroadcastScreenState extends State<BroadcastScreen> {
     _hevcService.setMicrophoneMuted(muted);
   }
 
+  Widget _buildManualDialCard(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Manual Connection (WAN / Cellular)',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Bypass mDNS and dial a public IP/port directly.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _manualDestinationController,
+              enabled: !_isBusy && !_isBroadcasting,
+              keyboardType: TextInputType.url,
+              textInputAction: TextInputAction.go,
+              onSubmitted: (_) {
+                unawaited(_connectToManualDestination());
+              },
+              decoration: const InputDecoration(
+                border: OutlineInputBorder(),
+                labelText: 'Receiver IP:Port',
+                hintText: _manualDialPlaceholder,
+                prefixIcon: Icon(Icons.public),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerRight,
+              child: FilledButton.icon(
+                onPressed: _isBusy || _isBroadcasting
+                    ? null
+                    : _connectToManualDestination,
+                icon: const Icon(Icons.wifi_tethering),
+                label: const Text('Connect'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildDiscoveryCard(BuildContext context) {
     if (!_discoveryService.isSupported) {
       return const Card(
@@ -1489,6 +1617,7 @@ class _BroadcastScreenState extends State<BroadcastScreen> {
   void dispose() {
     _cancelSenderHandshakeTimeout();
     _senderEventSubscription?.cancel();
+    _manualDestinationController.dispose();
     unawaited(_discoveryService.dispose());
     super.dispose();
   }
@@ -1530,8 +1659,11 @@ class _BroadcastScreenState extends State<BroadcastScreen> {
                     ),
                   ),
                 )
-              else
+              else ...[
+                _buildManualDialCard(context),
+                const SizedBox(height: 12),
                 _buildDiscoveryCard(context),
+              ],
               const SizedBox(height: 16),
               LinearProgressIndicator(
                 value: _progress,

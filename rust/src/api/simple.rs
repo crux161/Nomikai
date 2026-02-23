@@ -11,6 +11,11 @@ use tokio::task::spawn_blocking;
 type HevcFrameTx = UnboundedSender<(Vec<u8>, bool, u64)>;
 type AudioFrameTx = UnboundedSender<(Vec<u8>, u64)>;
 
+/// Sankaku protocol defaults. Dart currently passes bind/dial addresses explicitly,
+/// but keeping the canonical port here prevents drift across layers.
+pub const DEFAULT_SANKAKU_UDP_PORT: u16 = 9292;
+pub const DEFAULT_SANKAKU_RECEIVER_BIND_HOST: &str = "0.0.0.0";
+
 static HEVC_FRAME_TX: OnceLock<Mutex<Option<HevcFrameTx>>> = OnceLock::new();
 static AUDIO_FRAME_TX: OnceLock<Mutex<Option<AudioFrameTx>>> = OnceLock::new();
 static SENDER_SHOULD_RUN: AtomicBool = AtomicBool::new(false);

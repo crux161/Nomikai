@@ -11,6 +11,7 @@ class NomikaiDiscoveryService {
 
   static const String serviceType = '_nomikai._udp';
   static const String _serviceNamePrefix = 'Nomikai Receiver';
+  static const int defaultSankakuPort = 9292;
 
   final ValueNotifier<List<nsd.Service>> discoveredServices =
       ValueNotifier<List<nsd.Service>>(const <nsd.Service>[]);
@@ -31,7 +32,7 @@ class NomikaiDiscoveryService {
     _logger?.call(message);
   }
 
-  Future<void> startBroadcasting(int port) async {
+  Future<void> startBroadcasting([int port = defaultSankakuPort]) async {
     if (!isSupported || _isDisposed) {
       return;
     }
@@ -127,7 +128,7 @@ class NomikaiDiscoveryService {
       final resolved = await nsd.resolve(service);
       final hasAddress =
           resolved.addresses != null && resolved.addresses!.isNotEmpty;
-      if (resolved.port != null && hasAddress) {
+      if (resolved.port == defaultSankakuPort && hasAddress) {
         _serviceByKey[_serviceKey(resolved)] = resolved;
         _publish();
       }
@@ -172,6 +173,12 @@ class NomikaiDiscoveryService {
     final hasAddress =
         resolved.addresses != null && resolved.addresses!.isNotEmpty;
     if (resolved.port == null || !hasAddress) {
+      return;
+    }
+    if (resolved.port != defaultSankakuPort) {
+      _log(
+        'DEBUG: Ignoring mDNS service on unexpected port ${resolved.port}; expected $defaultSankakuPort',
+      );
       return;
     }
 
