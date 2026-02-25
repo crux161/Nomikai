@@ -12,14 +12,16 @@ part 'simple.freezed.dart';
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `FrameIngressGuard`, `ReceiverRunGuard`, `SenderRunGuard`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `drop`, `drop`, `drop`, `from`
 
-Future<void> pushHevcFrame({
+Future<void> pushVideoFrame({
   required List<int> frameBytes,
   required bool isKeyframe,
   required BigInt pts,
-}) => RustLib.instance.api.crateApiSimplePushHevcFrame(
+  required int codec,
+}) => RustLib.instance.api.crateApiSimplePushVideoFrame(
   frameBytes: frameBytes,
   isKeyframe: isKeyframe,
   pts: pts,
+  codec: codec,
 );
 
 Future<void> pushAudioFrame({

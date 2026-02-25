@@ -73,6 +73,7 @@ final class HevcAudioStreamHandler: NSObject, FlutterStreamHandler {
 
 final class HevcDumper: NSObject, FlutterStreamHandler {
   private static let annexBStartCode = Data([0x00, 0x00, 0x00, 0x01])
+  private static let videoCodecHevc: UInt8 = 0x01
   private static let hevcOutputCallback: VTCompressionOutputCallback = {
     outputCallbackRefCon,
     _,
@@ -416,6 +417,7 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
         "bytes": FlutterStandardTypedData(bytes: data),
         "is_keyframe": isKeyframe,
         "pts": NSNumber(value: ptsUs),
+        "codec": NSNumber(value: Self.videoCodecHevc),
       ])
     }
   }

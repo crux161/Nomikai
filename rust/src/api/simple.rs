@@ -1,14 +1,17 @@
 use crate::frb_generated::StreamSink;
 use anyhow::{anyhow, bail, Context};
 use flutter_rust_bridge::frb;
-use sankaku_core::{KyuEvent as SankakuEvent, SankakuReceiver, SankakuSender, VideoFrame};
+use sankaku_core::{
+    KyuEvent as SankakuEvent, SankakuReceiver, SankakuSender, StreamType, VideoFrame,
+    VIDEO_CODEC_HEVC,
+};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::task::spawn_blocking;
 
-type HevcFrameTx = UnboundedSender<(Vec<u8>, bool, u64)>;
+type HevcFrameTx = UnboundedSender<(Vec<u8>, bool, u64, u8)>;
 type AudioFrameTx = UnboundedSender<(Vec<u8>, u64)>;
 
 /// Sankaku protocol defaults. Dart currently passes bind/dial addresses explicitly,
@@ -182,11 +185,12 @@ async fn send_sender_frame(
     payload: Vec<u8>,
     is_keyframe: bool,
     pts: u64,
+    codec: u8,
     dest: &str,
     handshake_announced: &mut bool,
 ) -> anyhow::Result<()> {
     let payload_len = payload.len() as u64;
-    let frame = VideoFrame::nal(payload, pts, is_keyframe);
+    let frame = VideoFrame::nal_with_codec(payload, pts, is_keyframe, codec);
     match sender.send_frame(stream_id, frame).await {
         Ok(frame_index) => {
             println!(
@@ -258,11 +262,17 @@ async fn send_sender_frame(
     }
 }
 
-pub fn push_hevc_frame(frame_bytes: Vec<u8>, is_keyframe: bool, pts: u64) -> anyhow::Result<()> {
+pub fn push_video_frame(
+    frame_bytes: Vec<u8>,
+    is_keyframe: bool,
+    pts: u64,
+    codec: u8,
+) -> anyhow::Result<()> {
+    let codec = if codec == 0 { VIDEO_CODEC_HEVC } else { codec };
     let frame_len = frame_bytes.len();
     println!(
-        "DEBUG: Rust received HEVC frame from Dart: {} bytes (keyframe={}, pts_us={})",
-        frame_len, is_keyframe, pts
+        "DEBUG: Rust received VIDEO frame from Dart: {} bytes (keyframe={}, pts_us={}, codec=0x{:02X})",
+        frame_len, is_keyframe, pts, codec
     );
     let tx = {
         let guard = hevc_frame_tx_slot()
@@ -272,7 +282,7 @@ pub fn push_hevc_frame(frame_bytes: Vec<u8>, is_keyframe: bool, pts: u64) -> any
             .clone()
             .context("sender is not active; call start_sankaku_sender first")?
     };
-    tx.send((frame_bytes, is_keyframe, pts))
+    tx.send((frame_bytes, is_keyframe, pts, codec))
         .map_err(|_| anyhow!("sender frame ingress channel is closed"))?;
     Ok(())
 }
@@ -334,8 +344,8 @@ async fn run_sender_loop(
     );
     sink_event(&sink, UiEvent::HandshakeInitiated);
 
-    let video_stream_id = sender.open_stream()?;
-    let audio_stream_id = sender.open_stream()?;
+    let video_stream_id = sender.open_stream_with_type(StreamType::Video)?;
+    let audio_stream_id = sender.open_stream_with_type(StreamType::Audio)?;
     sink_event(
         &sink,
         UiEvent::Telemetry {
@@ -364,7 +374,7 @@ async fn run_sender_loop(
         },
     );
 
-    let (frame_tx, mut frame_rx) = mpsc::unbounded_channel::<(Vec<u8>, bool, u64)>();
+    let (frame_tx, mut frame_rx) = mpsc::unbounded_channel::<(Vec<u8>, bool, u64, u8)>();
     let (audio_tx, mut audio_rx) = mpsc::unbounded_channel::<(Vec<u8>, u64)>();
     install_hevc_frame_tx(frame_tx)?;
     install_audio_frame_tx(audio_tx)?;
@@ -377,7 +387,7 @@ async fn run_sender_loop(
 
     loop {
         tokio::select! {
-            Some((frame_bytes, is_keyframe, pts)) = frame_rx.recv() => {
+            Some((frame_bytes, is_keyframe, pts, codec)) = frame_rx.recv() => {
                 if frame_bytes.is_empty() {
                     continue;
                 }
@@ -388,6 +398,7 @@ async fn run_sender_loop(
                     frame_bytes,
                     is_keyframe,
                     pts,
+                    codec,
                     &dest,
                     &mut handshake_announced,
                 ).await?;

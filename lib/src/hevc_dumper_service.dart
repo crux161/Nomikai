@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:nomikai/src/rust/api/simple.dart';
 
 class HevcDumperService {
+  static const int _videoCodecHevc = 0x01;
   static const MethodChannel _channel = MethodChannel(
     'com.nomikai.sankaku/hevc_dumper',
   );
@@ -78,8 +79,9 @@ class HevcDumperService {
           if (event is Map) {
             final bytesLength = _decodeBytes(event['bytes'])?.length ?? 0;
             final ptsUs = _decodePts(event['pts']) ?? 0;
+            final codec = _decodeCodec(event['codec']) ?? _videoCodecHevc;
             print(
-              'DEBUG: Dart received VIDEO chunk: $bytesLength bytes (Keyframe: ${event['is_keyframe']}, pts_us=$ptsUs)',
+              'DEBUG: Dart received VIDEO chunk: $bytesLength bytes (Keyframe: ${event['is_keyframe']}, pts_us=$ptsUs, codec=0x${codec.toRadixString(16).padLeft(2, '0')})',
             );
           } else {
             print('DEBUG: Dart received VIDEO chunk: 0 bytes (Keyframe: null)');
@@ -128,12 +130,13 @@ class HevcDumperService {
     }
 
     unawaited(
-      pushHevcFrame(
+      pushVideoFrame(
         frameBytes: frameEvent.bytes,
         isKeyframe: frameEvent.isKeyframe,
         pts: BigInt.from(frameEvent.ptsUs),
+        codec: frameEvent.codec,
       ).catchError((Object error, StackTrace stackTrace) {
-        debugPrint('pushHevcFrame failed: $error');
+        debugPrint('pushVideoFrame failed: $error');
       }),
     );
   }
@@ -166,6 +169,7 @@ class HevcDumperService {
     final rawBytes = event['bytes'];
     final rawIsKeyframe = event['is_keyframe'];
     final rawPts = event['pts'];
+    final rawCodec = event['codec'];
     final bytes = _decodeBytes(rawBytes);
     if (bytes == null) {
       return null;
@@ -173,7 +177,13 @@ class HevcDumperService {
 
     final isKeyframe = rawIsKeyframe is bool ? rawIsKeyframe : false;
     final ptsUs = _decodePts(rawPts) ?? 0;
-    return _HevcFrameEvent(bytes: bytes, isKeyframe: isKeyframe, ptsUs: ptsUs);
+    final codec = _decodeCodec(rawCodec) ?? _videoCodecHevc;
+    return _HevcFrameEvent(
+      bytes: bytes,
+      isKeyframe: isKeyframe,
+      ptsUs: ptsUs,
+      codec: codec,
+    );
   }
 
   _AudioFrameEvent? _decodeAudioFrameEvent(dynamic event) {
@@ -215,6 +225,16 @@ class HevcDumperService {
     }
     return null;
   }
+
+  int? _decodeCodec(dynamic value) {
+    if (value is int) {
+      return value;
+    }
+    if (value is num) {
+      return value.toInt();
+    }
+    return null;
+  }
 }
 
 class _HevcFrameEvent {
@@ -222,11 +242,13 @@ class _HevcFrameEvent {
     required this.bytes,
     required this.isKeyframe,
     required this.ptsUs,
+    required this.codec,
   });
 
   final Uint8List bytes;
   final bool isKeyframe;
   final int ptsUs;
+  final int codec;
 }
 
 class _AudioFrameEvent {

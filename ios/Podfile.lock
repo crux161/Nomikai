@@ -43,6 +43,9 @@ PODS:
   - SDWebImage (5.21.6):
     - SDWebImage/Core (= 5.21.6)
   - SDWebImage/Core (5.21.6)
+  - shared_preferences_foundation (0.0.1):
+    - Flutter
+    - FlutterMacOS
   - SwiftyGif (5.4.5)
 
 DEPENDENCIES:
@@ -51,6 +54,7 @@ DEPENDENCIES:
   - integration_test (from `.symlinks/plugins/integration_test/ios`)
   - nsd_ios (from `.symlinks/plugins/nsd_ios/ios`)
   - rust_lib_nomikai (from `.symlinks/plugins/rust_lib_nomikai/ios`)
+  - shared_preferences_foundation (from `.symlinks/plugins/shared_preferences_foundation/darwin`)
 
 SPEC REPOS:
   trunk:
@@ -70,6 +74,8 @@ EXTERNAL SOURCES:
     :path: ".symlinks/plugins/nsd_ios/ios"
   rust_lib_nomikai:
     :path: ".symlinks/plugins/rust_lib_nomikai/ios"
+  shared_preferences_foundation:
+    :path: ".symlinks/plugins/shared_preferences_foundation/darwin"
 
 SPEC CHECKSUMS:
   DKImagePickerController: 946cec48c7873164274ecc4624d19e3da4c1ef3c
@@ -80,6 +86,7 @@ SPEC CHECKSUMS:
   nsd_ios: 596ad79109ddd3e52d665f650f36428049e3653e
   rust_lib_nomikai: 97a57dbea18436911d92c6bb3919b5a813f6115a
   SDWebImage: 1bb6a1b84b6fe87b972a102bdc77dd589df33477
+  shared_preferences_foundation: 7036424c3d8ec98dfe75ff1667cb0cd531ec82bb
   SwiftyGif: 706c60cf65fa2bc5ee0313beece843c8eb8194d4
 
 PODFILE CHECKSUM: 7c4206e1b6fe71bfd153322ae7c3bc10f28d3def

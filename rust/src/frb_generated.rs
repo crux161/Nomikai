@@ -37,7 +37,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1949213738;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 805631695;
 
 // Section: executor
 
@@ -116,7 +116,7 @@ fn wire__crate__api__simple__push_audio_frame_impl(
         },
     )
 }
-fn wire__crate__api__simple__push_hevc_frame_impl(
+fn wire__crate__api__simple__push_video_frame_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -124,7 +124,7 @@ fn wire__crate__api__simple__push_hevc_frame_impl(
 ) {
     FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
         flutter_rust_bridge::for_generated::TaskInfo {
-            debug_name: "push_hevc_frame",
+            debug_name: "push_video_frame",
             port: Some(port_),
             mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
         },
@@ -141,14 +141,16 @@ fn wire__crate__api__simple__push_hevc_frame_impl(
             let api_frame_bytes = <Vec<u8>>::sse_decode(&mut deserializer);
             let api_is_keyframe = <bool>::sse_decode(&mut deserializer);
             let api_pts = <u64>::sse_decode(&mut deserializer);
+            let api_codec = <u8>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
                     (move || {
-                        let output_ok = crate::api::simple::push_hevc_frame(
+                        let output_ok = crate::api::simple::push_video_frame(
                             api_frame_bytes,
                             api_is_keyframe,
                             api_pts,
+                            api_codec,
                         )?;
                         Ok(output_ok)
                     })(),
@@ -506,7 +508,7 @@ fn pde_ffi_dispatcher_primary_impl(
     match func_id {
         1 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
         2 => wire__crate__api__simple__push_audio_frame_impl(port, ptr, rust_vec_len, data_len),
-        3 => wire__crate__api__simple__push_hevc_frame_impl(port, ptr, rust_vec_len, data_len),
+        3 => wire__crate__api__simple__push_video_frame_impl(port, ptr, rust_vec_len, data_len),
         4 => {
             wire__crate__api__simple__start_sankaku_receiver_impl(port, ptr, rust_vec_len, data_len)
         }

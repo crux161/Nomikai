@@ -66,7 +66,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => -1949213738;
+  int get rustContentHash => 805631695;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -84,10 +84,11 @@ abstract class RustLibApi extends BaseApi {
     required BigInt pts,
   });
 
-  Future<void> crateApiSimplePushHevcFrame({
+  Future<void> crateApiSimplePushVideoFrame({
     required List<int> frameBytes,
     required bool isKeyframe,
     required BigInt pts,
+    required int codec,
   });
 
   Stream<UiEvent> crateApiSimpleStartSankakuReceiver({
@@ -176,10 +177,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<void> crateApiSimplePushHevcFrame({
+  Future<void> crateApiSimplePushVideoFrame({
     required List<int> frameBytes,
     required bool isKeyframe,
     required BigInt pts,
+    required int codec,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -188,6 +190,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_list_prim_u_8_loose(frameBytes, serializer);
           sse_encode_bool(isKeyframe, serializer);
           sse_encode_u_64(pts, serializer);
+          sse_encode_u_8(codec, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -199,17 +202,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeSuccessData: sse_decode_unit,
           decodeErrorData: sse_decode_AnyhowException,
         ),
-        constMeta: kCrateApiSimplePushHevcFrameConstMeta,
-        argValues: [frameBytes, isKeyframe, pts],
+        constMeta: kCrateApiSimplePushVideoFrameConstMeta,
+        argValues: [frameBytes, isKeyframe, pts, codec],
         apiImpl: this,
       ),
     );
   }
 
-  TaskConstMeta get kCrateApiSimplePushHevcFrameConstMeta =>
+  TaskConstMeta get kCrateApiSimplePushVideoFrameConstMeta =>
       const TaskConstMeta(
-        debugName: "push_hevc_frame",
-        argNames: ["frameBytes", "isKeyframe", "pts"],
+        debugName: "push_video_frame",
+        argNames: ["frameBytes", "isKeyframe", "pts", "codec"],
       );
 
   @override
