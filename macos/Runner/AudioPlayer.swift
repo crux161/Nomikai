@@ -32,32 +32,45 @@ final class AudioPlayer {
   private static let audioLeadTrimUs: UInt64 = 60_000
   private static let staleAudioDropThresholdUs: UInt64 = 120_000
   private static let maxQueuedAudioSpanUs: UInt64 = 220_000
-  private static let gateBypassStallUs: UInt64 = 750_000
   private static let gateBlockLogIntervalUs: UInt64 = 250_000
-  private static let gateBypassQueueDepth = 10
+  private static let renderSummaryLogIntervalUs: UInt64 = 250_000
   private static let maxDebugLogLines = 2_000
 
-  private struct QueuedAudioFrame {
+  private struct QueuedPcmChunk {
     let ptsUs: UInt64
-    let data: Data
-    let framesPerPacketHint: UInt32
+    let samples: [Float]  // Mono PCM float32 samples.
+    var readIndex: Int
+    let sourceByteCount: Int
+    let senderFramesPerPacketHint: UInt32
+
+    var remainingFrames: Int {
+      max(0, samples.count - readIndex)
+    }
   }
 
   private let playerQueue = DispatchQueue(label: "com.nomikai.sankaku.audio_player.queue")
   private let debugLogQueue = DispatchQueue(label: "com.nomikai.sankaku.audio_player.debug_log")
+  private let pcmQueueLock = NSLock()
   private let engine = AVAudioEngine()
-  private let playerNode = AVAudioPlayerNode()
   private let syncClock: PlaybackSyncClock
 
   private let opusFormat: AVAudioFormat
   private let pcmFormat: AVAudioFormat
   private let converter: AVAudioConverter
+
+  private lazy var sourceNode: AVAudioSourceNode = makeSourceNode()
+
   private var isStarted = false
-  private var drainTimer: DispatchSourceTimer?
-  private var queuedFrames: [QueuedAudioFrame] = []
+  private var sourceNodeAttached = false
+  private var voiceProcessingConfigured = false
+  private var queuedPcmChunks: [QueuedPcmChunk] = []
   private var gateBlockedSinceUs: UInt64?
   private var lastGateBlockLogUs: UInt64 = 0
-  private var lastDrainSummaryLogUs: UInt64 = 0
+  private var lastRenderSummaryLogUs: UInt64 = 0
+  private var lastDecoderStatusTraceUs: UInt64 = 0
+  private var lastDecoderStatusTraceName: String?
+  private var renderedFramesSinceSummary: UInt64 = 0
+  private var silentFramesSinceSummary: UInt64 = 0
   private var debugLogLines: [String] = []
 
   init(syncClock: PlaybackSyncClock) throws {
@@ -106,9 +119,7 @@ final class AudioPlayer {
   }
 
   deinit {
-    drainTimer?.setEventHandler {}
-    drainTimer?.cancel()
-    drainTimer = nil
+    // No explicit timer teardown: rendering is pull-driven by AVAudioSourceNode.
   }
 
   func debugLogSnapshot() -> [String] {
@@ -122,10 +133,33 @@ final class AudioPlayer {
   }
 
   func start() throws {
+    if !sourceNodeAttached {
+      engine.attach(sourceNode)
+      engine.connect(sourceNode, to: engine.mainMixerNode, format: pcmFormat)
+      sourceNodeAttached = true
+      logf("AudioPlayer: AVAudioSourceNode attached to main mixer")
+    }
+
+    if !voiceProcessingConfigured {
+      // One-time best-effort voice processing enablement. If this device/configuration
+      // rejects it (e.g. -10849), we log and continue without retrying every frame.
+      voiceProcessingConfigured = true
+      do {
+        if #available(macOS 10.15, *) {
+          try engine.outputNode.setVoiceProcessingEnabled(true)
+          logf("AudioPlayer: voice processing enabled on output node")
+        } else {
+          logf("AudioPlayer: voice processing unavailable on this macOS version")
+        }
+      } catch {
+        logf(
+          "AudioPlayer: failed to enable voice processing on output node: %@",
+          error.localizedDescription
+        )
+      }
+    }
+
     if !isStarted {
-      engine.attach(playerNode)
-      engine.connect(playerNode, to: engine.mainMixerNode, format: pcmFormat)
-      playerNode.volume = 1.0
       engine.mainMixerNode.outputVolume = 1.0
       engine.prepare()
       isStarted = true
@@ -136,10 +170,6 @@ final class AudioPlayer {
       try engine.start()
       logf("AudioPlayer: AVAudioEngine started")
     }
-    if !playerNode.isPlaying {
-      playerNode.play()
-      logf("AudioPlayer: AVAudioPlayerNode started")
-    }
   }
 
   func decodeAndPlay(opusData: Data, ptsUs: UInt64 = 0, framesPerPacketHint: UInt32 = 0) {
@@ -147,7 +177,7 @@ final class AudioPlayer {
 
     playerQueue.async { [weak self] in
       guard let self else { return }
-      self.enqueueAudioFrameOnQueue(opusData, ptsUs: ptsUs, framesPerPacketHint: framesPerPacketHint)
+      self.enqueueDecodedAudioOnQueue(opusData, ptsUs: ptsUs, framesPerPacketHint: framesPerPacketHint)
     }
   }
 
@@ -162,14 +192,14 @@ final class AudioPlayer {
       guard let self else { return }
       do {
         try self.start()
-        logf("AudioPlayer: resumed playback")
+        self.logf("AudioPlayer: resumed playback")
       } catch {
-        logf("AudioPlayer: failed to resume playback: \(error.localizedDescription)")
+        self.logf("AudioPlayer: failed to resume playback: %@", error.localizedDescription)
       }
     }
   }
 
-  private func enqueueAudioFrameOnQueue(
+  private func enqueueDecodedAudioOnQueue(
     _ opusData: Data,
     ptsUs: UInt64,
     framesPerPacketHint: UInt32
@@ -181,237 +211,328 @@ final class AudioPlayer {
         ptsUs,
         framesPerPacketHint
       )
+      syncClock.anchorIfNeeded(remotePtsUs: ptsUs, source: "first audio frame")
     }
-
-    let item = QueuedAudioFrame(
-      ptsUs: ptsUs,
-      data: opusData,
-      framesPerPacketHint: framesPerPacketHint
-    )
-    insertQueuedAudioFrame(item)
-    trimQueueSpanIfNeededOnQueue()
-    ensureDrainTimerOnQueue()
-    drainQueuedAudioOnQueue()
-  }
-
-  private func suspendPlaybackOnQueue() {
-    queuedFrames.removeAll(keepingCapacity: true)
-    resetGateBlockTrackingOnQueue()
-    converter.reset()
-    if playerNode.isPlaying {
-      playerNode.stop()
-    }
-    if engine.isRunning {
-      engine.pause()
-    }
-    logf("AudioPlayer: playback suspended and queue cleared")
-  }
-
-  private func insertQueuedAudioFrame(_ item: QueuedAudioFrame) {
-    guard item.ptsUs > 0 else {
-      queuedFrames.append(item)
-      return
-    }
-
-    let insertionIndex: Int =
-      queuedFrames.firstIndex(where: { existing in
-        existing.ptsUs > 0 && existing.ptsUs > item.ptsUs
-      }) ?? queuedFrames.endIndex
-    queuedFrames.insert(item, at: insertionIndex)
-  }
-
-  private func ensureDrainTimerOnQueue() {
-    guard drainTimer == nil else { return }
-
-    let timer = DispatchSource.makeTimerSource(queue: playerQueue)
-    timer.schedule(deadline: .now(), repeating: .milliseconds(5), leeway: .milliseconds(2))
-    timer.setEventHandler { [weak self] in
-      self?.drainQueuedAudioOnQueue()
-    }
-    drainTimer = timer
-    timer.resume()
-  }
-
-  private func drainQueuedAudioOnQueue() {
-    guard !queuedFrames.isEmpty else { return }
 
     do {
       try start()
     } catch {
-      logf("AudioPlayer: failed to start audio engine: \(error.localizedDescription)")
+      logf("AudioPlayer: failed to start audio engine: %@", error.localizedDescription)
       return
     }
 
-    var drainedCount = 0
-    while !queuedFrames.isEmpty {
-      let next = queuedFrames[0]
-
-      if next.ptsUs == 0 {
-        resetGateBlockTrackingOnQueue()
-        queuedFrames.removeFirst()
-        decodeAndSchedule(
-          opusData: next.data,
-          ptsUs: 0,
-          framesPerPacketHint: next.framesPerPacketHint,
-          bypassedPtsGate: false
-        )
-        drainedCount += 1
-      } else {
-        // Audio-only sessions never receive a video keyframe, so allow audio
-        // to establish the shared playback clock when it is the first media.
-        syncClock.anchorIfNeeded(remotePtsUs: next.ptsUs, source: "first audio frame")
-
-        guard let playablePtsUsRaw = syncClock.playablePtsUpperBoundUs() else {
-          logGateBlockOnQueue(
-            reason: "waiting_for_sync_anchor",
-            nextPtsUs: next.ptsUs,
-            playablePtsUs: nil
-          )
-          if shouldBypassPtsGateOnQueue(queueDepth: queuedFrames.count) {
-            logf(
-              "AudioPlayer: bypassing PTS gate after stall (no sync anchor yet). queue_depth=%d next_pts_us=%llu",
-              queuedFrames.count,
-              next.ptsUs
-            )
-            queuedFrames.removeFirst()
-            decodeAndSchedule(
-              opusData: next.data,
-              ptsUs: next.ptsUs,
-              framesPerPacketHint: next.framesPerPacketHint,
-              bypassedPtsGate: true
-            )
-            drainedCount += 1
-            continue
-          }
-          break
-        }
-        let playablePtsUs = playablePtsUsRaw > Self.audioLeadTrimUs
-          ? (playablePtsUsRaw - Self.audioLeadTrimUs)
-          : 0
-
-        let droppedForLag = dropStaleQueuedAudioIfNeededOnQueue(playablePtsUs: playablePtsUs)
-        if droppedForLag > 0 {
-          continue
-        }
-
-        if next.ptsUs > playablePtsUs {
-          logGateBlockOnQueue(
-            reason: "waiting_for_pts_window",
-            nextPtsUs: next.ptsUs,
-            playablePtsUs: playablePtsUs
-          )
-          if shouldBypassPtsGateOnQueue(queueDepth: queuedFrames.count) {
-            let deltaUs = next.ptsUs - playablePtsUs
-            logf(
-              "AudioPlayer: bypassing PTS gate after stall (delta_us=%llu queue_depth=%d next_pts_us=%llu playable_pts_us=%llu)",
-              deltaUs,
-              queuedFrames.count,
-              next.ptsUs,
-              playablePtsUs
-            )
-            queuedFrames.removeFirst()
-            decodeAndSchedule(
-              opusData: next.data,
-              ptsUs: next.ptsUs,
-              framesPerPacketHint: next.framesPerPacketHint,
-              bypassedPtsGate: true
-            )
-            drainedCount += 1
-            continue
-          }
-          break
-        }
-
-        resetGateBlockTrackingOnQueue()
-        queuedFrames.removeFirst()
-        decodeAndSchedule(
-          opusData: next.data,
-          ptsUs: next.ptsUs,
-          framesPerPacketHint: next.framesPerPacketHint,
-          bypassedPtsGate: false
-        )
-        drainedCount += 1
-      }
-
-      if drainedCount >= 16 {
-        break
-      }
-    }
-
-    if drainedCount > 0 {
-      let nowUs = Self.monotonicNowUs()
-      if lastDrainSummaryLogUs == 0 || nowUs - lastDrainSummaryLogUs >= 250_000 {
-        lastDrainSummaryLogUs = nowUs
-        logf(
-          "AudioPlayer: drained=%d queued_remaining=%d engine_running=%d player_playing=%d clock_anchored=%d",
-          drainedCount,
-          queuedFrames.count,
-          engine.isRunning ? 1 : 0,
-          playerNode.isPlaying ? 1 : 0,
-          syncClock.isAnchored() ? 1 : 0
-        )
-      }
-    }
-  }
-
-  private func decodeAndSchedule(
-    opusData: Data,
-    ptsUs: UInt64,
-    framesPerPacketHint: UInt32,
-    bypassedPtsGate: Bool
-  ) {
-    var decodeAttempt: (AVAudioPCMBuffer, AVAudioConverterOutputStatus, UInt32)?
-    var triedExactSenderHint = false
-    if framesPerPacketHint > 0 {
-      triedExactSenderHint = true
-      decodeAttempt = decodeOpusPacketToPcm(opusData, framesPerPacketHint: framesPerPacketHint)
-    }
-    if decodeAttempt == nil {
-      decodeAttempt = decodeOpusPacketToPcm(opusData, framesPerPacketHint: 0)
-    }
-    if decodeAttempt == nil
-      && (!triedExactSenderHint || framesPerPacketHint != Self.opusFramesPerPacket)
-    {
-      decodeAttempt = decodeOpusPacketToPcm(opusData, framesPerPacketHint: Self.opusFramesPerPacket)
-    }
-
-    guard let (pcmBuffer, status, usedFramesHint) = decodeAttempt else {
-      logf(
-        "AudioPlayer: Opus decode exhausted retries (bytes=%d pts_us=%llu sender_frames_hint=%u bypassed=%d)",
-        opusData.count,
-        ptsUs,
-        framesPerPacketHint,
-        bypassedPtsGate ? 1 : 0
-      )
+    let effectiveFramesHint = framesPerPacketHint > 0 ? framesPerPacketHint : Self.opusFramesPerPacket
+    guard let (pcmBuffer, status, usedFramesHint) = decodeOpusPacketToPcm(
+      opusData,
+      framesPerPacketHint: effectiveFramesHint
+    ) else {
       return
     }
 
-    if !engine.isRunning || !playerNode.isPlaying {
-      do {
-        try start()
-      } catch {
-        logf(
-          "AudioPlayer: failed to re-start engine before scheduling audio: \(error.localizedDescription)"
-        )
-        return
-      }
+    guard let channelData = pcmBuffer.floatChannelData else {
+      logf("AudioPlayer: decoded PCM buffer missing float channel data")
+      return
     }
 
-    playerNode.scheduleBuffer(pcmBuffer, completionHandler: nil)
-    if !playerNode.isPlaying {
-      playerNode.play()
-    }
-    log(
-      "DEBUG: Audio buffer decoded to PCM and scheduled frames=\(pcmBuffer.frameLength) bytes=\(opusData.count) pts_us=\(ptsUs) bypassed_pts_gate=\(bypassedPtsGate) status=\(Self.converterStatusName(status)) frames_hint=\(usedFramesHint) sender_frames_hint=\(framesPerPacketHint)"
-    )
-    if bypassedPtsGate {
+    let frameCount = Int(pcmBuffer.frameLength)
+    guard frameCount > 0 else {
       logf(
-        "AudioPlayer: scheduled audio after PTS gate bypass frames=%u bytes=%d pts_us=%llu",
-        pcmBuffer.frameLength,
+        "AudioPlayer: decoded PCM buffer was empty after successful decode (bytes=%d pts_us=%llu)",
         opusData.count,
         ptsUs
       )
+      return
     }
+
+    let samples = Array(UnsafeBufferPointer(start: channelData[0], count: frameCount))
+    enqueuePcmChunkOnQueue(
+      QueuedPcmChunk(
+        ptsUs: ptsUs,
+        samples: samples,
+        readIndex: 0,
+        sourceByteCount: opusData.count,
+        senderFramesPerPacketHint: framesPerPacketHint
+      )
+    )
+
+    log(
+      "DEBUG: Audio buffer decoded to PCM and queued frames=\(pcmBuffer.frameLength) bytes=\(opusData.count) pts_us=\(ptsUs) status=\(Self.converterStatusName(status)) frames_hint=\(usedFramesHint) sender_frames_hint=\(framesPerPacketHint)"
+    )
+  }
+
+  private func enqueuePcmChunkOnQueue(_ chunk: QueuedPcmChunk) {
+    pcmQueueLock.lock()
+    defer { pcmQueueLock.unlock() }
+
+    insertPcmChunkLocked(chunk)
+    trimPcmQueueSpanIfNeededLocked()
+  }
+
+  private func suspendPlaybackOnQueue() {
+    pcmQueueLock.lock()
+    queuedPcmChunks.removeAll(keepingCapacity: true)
+    gateBlockedSinceUs = nil
+    renderedFramesSinceSummary = 0
+    silentFramesSinceSummary = 0
+    pcmQueueLock.unlock()
+
+    converter.reset()
+
+    if engine.isRunning {
+      engine.pause()
+    }
+
+    logf("AudioPlayer: playback suspended and queue cleared")
+  }
+
+  private func insertPcmChunkLocked(_ item: QueuedPcmChunk) {
+    guard item.ptsUs > 0 else {
+      queuedPcmChunks.append(item)
+      return
+    }
+
+    let insertionIndex: Int =
+      queuedPcmChunks.firstIndex(where: { existing in
+        existing.ptsUs > 0 && existing.ptsUs > item.ptsUs
+      }) ?? queuedPcmChunks.endIndex
+    queuedPcmChunks.insert(item, at: insertionIndex)
+  }
+
+  private func trimPcmQueueSpanIfNeededLocked() {
+    guard queuedPcmChunks.count > 2 else { return }
+    guard
+      let firstPtsUs = queuedPcmChunks.first(where: { $0.ptsUs > 0 })?.ptsUs,
+      let lastChunk = queuedPcmChunks.last(where: { $0.ptsUs > 0 })
+    else {
+      return
+    }
+
+    let lastPtsUs = lastChunk.ptsUs + Self.framesToMicros(lastChunk.remainingFrames)
+    var spanUs = lastPtsUs > firstPtsUs ? (lastPtsUs - firstPtsUs) : 0
+    guard spanUs > Self.maxQueuedAudioSpanUs else { return }
+
+    var dropped = 0
+    while queuedPcmChunks.count > 1 {
+      guard let head = queuedPcmChunks.first else { break }
+      if head.ptsUs == 0 {
+        queuedPcmChunks.removeFirst()
+        dropped += 1
+        continue
+      }
+      guard let newest = queuedPcmChunks.last(where: { $0.ptsUs > 0 }) else { break }
+      let newestEndPtsUs = newest.ptsUs + Self.framesToMicros(newest.remainingFrames)
+      spanUs = newestEndPtsUs > head.ptsUs ? (newestEndPtsUs - head.ptsUs) : 0
+      if spanUs <= Self.maxQueuedAudioSpanUs {
+        break
+      }
+      queuedPcmChunks.removeFirst()
+      dropped += 1
+    }
+
+    if dropped > 0 {
+      gateBlockedSinceUs = nil
+      logf(
+        "AudioPlayer: trimmed queued audio span by dropping %d PCM chunk(s); queue_depth=%d target_span_us=%llu",
+        dropped,
+        queuedPcmChunks.count,
+        Self.maxQueuedAudioSpanUs
+      )
+    }
+  }
+
+  private func makeSourceNode() -> AVAudioSourceNode {
+    AVAudioSourceNode(format: pcmFormat) { [weak self] _, _, frameCount, audioBufferList -> OSStatus in
+      guard let self else {
+        Self.zeroAudioBufferList(audioBufferList, frameCount: frameCount)
+        return noErr
+      }
+      return self.renderAudio(frameCount: frameCount, audioBufferList: audioBufferList)
+    }
+  }
+
+  private func renderAudio(
+    frameCount: AVAudioFrameCount,
+    audioBufferList: UnsafeMutablePointer<AudioBufferList>
+  ) -> OSStatus {
+    Self.zeroAudioBufferList(audioBufferList, frameCount: frameCount)
+
+    let buffers = UnsafeMutableAudioBufferListPointer(audioBufferList)
+    let nowUs = Self.monotonicNowUs()
+
+    var framesWritten = 0
+    var framesSilenced = Int(frameCount)
+    var renderBlockReason: (String, UInt64, UInt64?)?
+
+    let playablePtsUsRaw = syncClock.playablePtsUpperBoundUs()
+    let playablePtsUs = playablePtsUsRaw.map { raw in
+      raw > Self.audioLeadTrimUs ? (raw - Self.audioLeadTrimUs) : 0
+    }
+
+    pcmQueueLock.lock()
+    defer {
+      renderedFramesSinceSummary += UInt64(framesWritten)
+      silentFramesSinceSummary += UInt64(max(0, framesSilenced))
+      if lastRenderSummaryLogUs == 0 || nowUs - lastRenderSummaryLogUs >= Self.renderSummaryLogIntervalUs {
+        lastRenderSummaryLogUs = nowUs
+        logf(
+          "AudioPlayer: render summary rendered_frames=%llu silent_frames=%llu queue_depth=%d engine_running=%d clock_anchored=%d",
+          renderedFramesSinceSummary,
+          silentFramesSinceSummary,
+          queuedPcmChunks.count,
+          engine.isRunning ? 1 : 0,
+          syncClock.isAnchored() ? 1 : 0
+        )
+        renderedFramesSinceSummary = 0
+        silentFramesSinceSummary = 0
+      }
+      if let (reason, nextPtsUs, playablePtsUs) = renderBlockReason,
+        shouldLogGateBlockLocked(nowUs: nowUs)
+      {
+        if let playablePtsUs {
+          let deltaUs = nextPtsUs > playablePtsUs ? (nextPtsUs - playablePtsUs) : 0
+          logf(
+            "AudioPlayer: render blocked reason=%@ queue_depth=%d next_pts_us=%llu playable_pts_us=%llu delta_us=%llu clock_anchored=%d",
+            reason,
+            queuedPcmChunks.count,
+            nextPtsUs,
+            playablePtsUs,
+            deltaUs,
+            syncClock.isAnchored() ? 1 : 0
+          )
+        } else {
+          logf(
+            "AudioPlayer: render blocked reason=%@ queue_depth=%d next_pts_us=%llu clock_anchored=%d",
+            reason,
+            queuedPcmChunks.count,
+            nextPtsUs,
+            syncClock.isAnchored() ? 1 : 0
+          )
+        }
+      }
+      pcmQueueLock.unlock()
+    }
+
+    while framesWritten < Int(frameCount) {
+      if queuedPcmChunks.isEmpty {
+        renderBlockReason = ("queue_empty", 0, playablePtsUs)
+        break
+      }
+
+      if let playablePtsUs {
+        let dropped = dropStalePcmLocked(playablePtsUs: playablePtsUs)
+        if dropped > 0 {
+          continue
+        }
+      }
+
+      guard !queuedPcmChunks.isEmpty else {
+        renderBlockReason = ("queue_empty", 0, playablePtsUs)
+        break
+      }
+
+      var head = queuedPcmChunks[0]
+      guard head.remainingFrames > 0 else {
+        queuedPcmChunks.removeFirst()
+        continue
+      }
+
+      if head.ptsUs > 0 {
+        let currentHeadPtsUs = Self.chunkCurrentPtsUs(head)
+        syncClock.anchorIfNeeded(remotePtsUs: currentHeadPtsUs, source: "first audio frame")
+
+        guard let playablePtsUs else {
+          gateBlockedSinceUs = gateBlockedSinceUs ?? nowUs
+          renderBlockReason = ("waiting_for_sync_anchor", currentHeadPtsUs, nil)
+          break
+        }
+
+        if currentHeadPtsUs > playablePtsUs {
+          gateBlockedSinceUs = gateBlockedSinceUs ?? nowUs
+          renderBlockReason = ("waiting_for_pts_window", currentHeadPtsUs, playablePtsUs)
+          break
+        }
+      }
+
+      gateBlockedSinceUs = nil
+
+      let framesRemaining = Int(frameCount) - framesWritten
+      let copyCount = min(framesRemaining, head.remainingFrames)
+      if copyCount <= 0 {
+        break
+      }
+
+      Self.copyMonoSamples(
+        head.samples,
+        from: head.readIndex,
+        count: copyCount,
+        into: buffers,
+        destinationFrameOffset: framesWritten
+      )
+
+      head.readIndex += copyCount
+      framesWritten += copyCount
+      framesSilenced -= copyCount
+
+      if head.remainingFrames <= 0 {
+        queuedPcmChunks.removeFirst()
+      } else {
+        queuedPcmChunks[0] = head
+      }
+    }
+
+    return noErr
+  }
+
+  private func dropStalePcmLocked(playablePtsUs: UInt64) -> Int {
+    var dropped = 0
+    while !queuedPcmChunks.isEmpty {
+      var head = queuedPcmChunks[0]
+      guard head.ptsUs > 0 else { break }
+      guard head.remainingFrames > 0 else {
+        queuedPcmChunks.removeFirst()
+        dropped += 1
+        continue
+      }
+
+      let currentPtsUs = Self.chunkCurrentPtsUs(head)
+      let lateByUs = playablePtsUs > currentPtsUs ? (playablePtsUs - currentPtsUs) : 0
+      if lateByUs <= Self.staleAudioDropThresholdUs {
+        break
+      }
+
+      let dropFrames = min(
+        head.remainingFrames,
+        max(1, Self.microsToFrames(lateByUs - Self.staleAudioDropThresholdUs))
+      )
+      head.readIndex += dropFrames
+      if head.remainingFrames <= 0 {
+        queuedPcmChunks.removeFirst()
+      } else {
+        queuedPcmChunks[0] = head
+      }
+      dropped += 1
+    }
+
+    if dropped > 0 {
+      gateBlockedSinceUs = nil
+      logf(
+        "AudioPlayer: dropped stale decoded audio chunk/frame window(s)=%d queue_depth=%d playable_pts_us=%llu threshold_us=%llu",
+        dropped,
+        queuedPcmChunks.count,
+        playablePtsUs,
+        Self.staleAudioDropThresholdUs
+      )
+    }
+
+    return dropped
+  }
+
+  private func shouldLogGateBlockLocked(nowUs: UInt64) -> Bool {
+    if lastGateBlockLogUs != 0 && nowUs - lastGateBlockLogUs < Self.gateBlockLogIntervalUs {
+      return false
+    }
+    lastGateBlockLogUs = nowUs
+    return true
   }
 
   private func decodeOpusPacketToPcm(
@@ -435,8 +556,6 @@ final class AudioPlayer {
     if let packetDescriptions = compressedBuffer.packetDescriptions {
       packetDescriptions.pointee = AudioStreamPacketDescription(
         mStartOffset: 0,
-        // Opus packet durations vary (the sender now shows mixed 3ms/20ms packet cadence).
-        // Prefer letting CoreAudio derive it from the bitstream; fall back to 960 if needed.
         mVariableFramesInPacket: framesPerPacketHint,
         mDataByteSize: UInt32(opusData.count)
       )
@@ -445,21 +564,46 @@ final class AudioPlayer {
     }
 
     guard let pcmBuffer = AVAudioPCMBuffer(pcmFormat: pcmFormat, frameCapacity: 4096) else {
-      logf("AudioPlayer: \(AudioPlayerError.pcmBufferAllocationFailed.localizedDescription)")
+      logf("AudioPlayer: %@", AudioPlayerError.pcmBufferAllocationFailed.localizedDescription)
       return nil
     }
 
-    converter.reset()
     var providedInput = false
+    var inputBlockReturnedNoDataNow = false
     var convertError: NSError?
     let status = converter.convert(to: pcmBuffer, error: &convertError) { _, outStatus in
       if providedInput {
-        outStatus.pointee = .endOfStream
+        inputBlockReturnedNoDataNow = true
+        outStatus.pointee = .noDataNow
         return nil
       }
       providedInput = true
       outStatus.pointee = .haveData
       return compressedBuffer
+    }
+
+    let statusName = Self.converterStatusName(status)
+    let nowUs = Self.monotonicNowUs()
+    let shouldTraceStatus =
+      inputBlockReturnedNoDataNow
+      || status == .haveData
+      || lastDecoderStatusTraceName != statusName
+    if shouldTraceStatus
+      && (inputBlockReturnedNoDataNow
+        || lastDecoderStatusTraceName != statusName
+        || lastDecoderStatusTraceUs == 0
+        || nowUs - lastDecoderStatusTraceUs >= 500_000)
+    {
+      logf(
+        "AudioPlayer: Opus converter trace input_no_data_now=%d output_status=%@ pcm_frames=%u bytes=%d frames_hint=%u",
+        inputBlockReturnedNoDataNow ? 1 : 0,
+        statusName,
+        pcmBuffer.frameLength,
+        opusData.count,
+        framesPerPacketHint
+      )
+      lastDecoderStatusTraceUs = nowUs
+      lastDecoderStatusTraceName = statusName
     }
 
     if status == .error {
@@ -477,136 +621,91 @@ final class AudioPlayer {
           opusData.count
         )
       }
-      converter.reset()
       return nil
     }
 
     guard pcmBuffer.frameLength > 0 else {
       logf(
         "AudioPlayer: Opus decode produced no PCM (status=%@ bytes=%d frames_hint=%u)",
-        Self.converterStatusName(status),
+        statusName,
         opusData.count,
         framesPerPacketHint
       )
-      converter.reset()
       return nil
     }
 
-    converter.reset()
     return (pcmBuffer, status, framesPerPacketHint)
   }
 
-  private func logGateBlockOnQueue(reason: String, nextPtsUs: UInt64, playablePtsUs: UInt64?) {
-    let nowUs = Self.monotonicNowUs()
-    if gateBlockedSinceUs == nil {
-      gateBlockedSinceUs = nowUs
-    }
-    if lastGateBlockLogUs != 0 && nowUs - lastGateBlockLogUs < Self.gateBlockLogIntervalUs {
-      return
-    }
-    lastGateBlockLogUs = nowUs
-
-    if let playablePtsUs {
-      let deltaUs = nextPtsUs > playablePtsUs ? nextPtsUs - playablePtsUs : 0
-      logf(
-        "AudioPlayer: drain blocked reason=%@ queue_depth=%d next_pts_us=%llu playable_pts_us=%llu delta_us=%llu clock_anchored=%d",
-        reason,
-        queuedFrames.count,
-        nextPtsUs,
-        playablePtsUs,
-        deltaUs,
-        syncClock.isAnchored() ? 1 : 0
-      )
-    } else {
-      logf(
-        "AudioPlayer: drain blocked reason=%@ queue_depth=%d next_pts_us=%llu clock_anchored=%d",
-        reason,
-        queuedFrames.count,
-        nextPtsUs,
-        syncClock.isAnchored() ? 1 : 0
-      )
+  private static func zeroAudioBufferList(
+    _ audioBufferList: UnsafeMutablePointer<AudioBufferList>,
+    frameCount: AVAudioFrameCount
+  ) {
+    let buffers = UnsafeMutableAudioBufferListPointer(audioBufferList)
+    for index in 0..<buffers.count {
+      guard let data = buffers[index].mData else { continue }
+      let bytesPerFrame = max(1, Int(buffers[index].mDataByteSize) / max(1, Int(frameCount)))
+      let bytesToClear = min(Int(buffers[index].mDataByteSize), Int(frameCount) * bytesPerFrame)
+      memset(data, 0, bytesToClear)
     }
   }
 
-  private func shouldBypassPtsGateOnQueue(queueDepth: Int) -> Bool {
-    guard queueDepth >= Self.gateBypassQueueDepth else {
-      return false
-    }
-    guard let gateBlockedSinceUs else {
-      return false
-    }
-    let nowUs = Self.monotonicNowUs()
-    return nowUs >= gateBlockedSinceUs && (nowUs - gateBlockedSinceUs) >= Self.gateBypassStallUs
-  }
+  private static func copyMonoSamples(
+    _ source: [Float],
+    from sourceOffset: Int,
+    count: Int,
+    into buffers: UnsafeMutableAudioBufferListPointer,
+    destinationFrameOffset: Int
+  ) {
+    guard count > 0, sourceOffset >= 0, sourceOffset + count <= source.count else { return }
 
-  private func resetGateBlockTrackingOnQueue() {
-    gateBlockedSinceUs = nil
-  }
-
-  private func trimQueueSpanIfNeededOnQueue() {
-    guard queuedFrames.count > 2 else { return }
-    guard
-      let firstPtsUs = queuedFrames.first(where: { $0.ptsUs > 0 })?.ptsUs,
-      let lastPtsUs = queuedFrames.last(where: { $0.ptsUs > 0 })?.ptsUs,
-      lastPtsUs > firstPtsUs
-    else {
+    if buffers.count == 1, let data = buffers[0].mData {
+      let channels = max(1, Int(buffers[0].mNumberChannels))
+      let dest = data.bindMemory(to: Float.self, capacity: (destinationFrameOffset + count) * channels)
+      if channels == 1 {
+        _ = source.withUnsafeBufferPointer { src in
+          memcpy(
+            dest.advanced(by: destinationFrameOffset),
+            src.baseAddress!.advanced(by: sourceOffset),
+            count * MemoryLayout<Float>.size
+          )
+        }
+      } else {
+        for frame in 0..<count {
+          let sample = source[sourceOffset + frame]
+          let base = (destinationFrameOffset + frame) * channels
+          for channel in 0..<channels {
+            dest[base + channel] = sample
+          }
+        }
+      }
       return
     }
 
-    var spanUs = lastPtsUs - firstPtsUs
-    guard spanUs > Self.maxQueuedAudioSpanUs else { return }
-
-    var dropped = 0
-    while queuedFrames.count > 1 {
-      guard let head = queuedFrames.first else { break }
-      guard head.ptsUs > 0 else {
-        queuedFrames.removeFirst()
-        dropped += 1
-        continue
+    for bufferIndex in 0..<buffers.count {
+      guard let data = buffers[bufferIndex].mData else { continue }
+      let dest = data.bindMemory(to: Float.self, capacity: destinationFrameOffset + count)
+      for frame in 0..<count {
+        dest[destinationFrameOffset + frame] = source[sourceOffset + frame]
       }
-      guard let newLastPtsUs = queuedFrames.last(where: { $0.ptsUs > 0 })?.ptsUs else { break }
-      spanUs = newLastPtsUs > head.ptsUs ? (newLastPtsUs - head.ptsUs) : 0
-      if spanUs <= Self.maxQueuedAudioSpanUs {
-        break
-      }
-      queuedFrames.removeFirst()
-      dropped += 1
-    }
-
-    if dropped > 0 {
-      resetGateBlockTrackingOnQueue()
-      logf(
-        "AudioPlayer: trimmed queued audio span by dropping %d packet(s); queue_depth=%d target_span_us=%llu",
-        dropped,
-        queuedFrames.count,
-        Self.maxQueuedAudioSpanUs
-      )
     }
   }
 
-  private func dropStaleQueuedAudioIfNeededOnQueue(playablePtsUs: UInt64) -> Int {
-    var dropped = 0
-    while let head = queuedFrames.first {
-      guard head.ptsUs > 0 else { break }
-      let headLateByUs = playablePtsUs > head.ptsUs ? (playablePtsUs - head.ptsUs) : 0
-      if headLateByUs <= Self.staleAudioDropThresholdUs {
-        break
-      }
-      queuedFrames.removeFirst()
-      dropped += 1
+  private static func chunkCurrentPtsUs(_ chunk: QueuedPcmChunk) -> UInt64 {
+    if chunk.ptsUs == 0 || chunk.readIndex <= 0 {
+      return chunk.ptsUs
     }
+    return chunk.ptsUs &+ framesToMicros(chunk.readIndex)
+  }
 
-    if dropped > 0 {
-      resetGateBlockTrackingOnQueue()
-      logf(
-        "AudioPlayer: dropped %d stale audio packet(s) to catch up (queue_depth=%d playable_pts_us=%llu threshold_us=%llu)",
-        dropped,
-        queuedFrames.count,
-        playablePtsUs,
-        Self.staleAudioDropThresholdUs
-      )
-    }
-    return dropped
+  private static func framesToMicros(_ frames: Int) -> UInt64 {
+    guard frames > 0 else { return 0 }
+    return (UInt64(frames) * 1_000_000) / UInt64(opusSampleRateHz)
+  }
+
+  private static func microsToFrames(_ micros: UInt64) -> Int {
+    if micros == 0 { return 0 }
+    return Int((micros * UInt64(opusSampleRateHz)) / 1_000_000)
   }
 
   private static func converterStatusName(_ status: AVAudioConverterOutputStatus) -> String {

@@ -694,10 +694,6 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
   private func encodeOpus(from pcmBuffer: AVAudioPCMBuffer, using converter: AVAudioConverter)
     -> [EncodedOpusPacket]?
   {
-    // We encode each capture callback as an independent Opus payload sequence.
-    // Reset the converter state so a prior end-of-stream does not suppress future output.
-    converter.reset()
-
     let packetCapacity = max(
       AVAudioPacketCount(1),
       AVAudioPacketCount((pcmBuffer.frameLength / 1024) + 1)
@@ -716,7 +712,9 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
     var conversionError: NSError?
     let status = converter.convert(to: outputBuffer, error: &conversionError) { _, outStatus in
       if fedInput {
-        outStatus.pointee = .endOfStream
+        // Keep the converter in streaming mode between callbacks. Using
+        // end-of-stream here causes per-callback flush/padding behavior.
+        outStatus.pointee = .noDataNow
         return nil
       }
 
@@ -742,7 +740,6 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
         pcmBuffer.frameLength,
         packetCapacity
       )
-      converter.reset()
       return nil
     }
 
@@ -760,7 +757,6 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
         data: packetData,
         framesPerPacket: framesPerPacket > 0 ? framesPerPacket : Self.defaultOpusFramesPerPacket
       )
-      converter.reset()
       return [packet]
     }
 
@@ -809,7 +805,6 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
       )
     }
 
-    converter.reset()
     return packets.isEmpty ? nil : packets
   }
 
