@@ -3,7 +3,7 @@ use anyhow::{anyhow, bail, Context};
 use flutter_rust_bridge::frb;
 use sankaku_core::{
     KyuEvent as SankakuEvent, SankakuReceiver, SankakuSender, StreamType, VideoFrame,
-    VIDEO_CODEC_HEVC,
+    AUDIO_CODEC_OPUS, VIDEO_CODEC_HEVC,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -12,7 +12,7 @@ use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::task::spawn_blocking;
 
 type HevcFrameTx = UnboundedSender<(Vec<u8>, bool, u64, u8)>;
-type AudioFrameTx = UnboundedSender<(Vec<u8>, u64)>;
+type AudioFrameTx = UnboundedSender<(Vec<u8>, u64, u8)>;
 
 /// Sankaku protocol defaults. Dart currently passes bind/dial addresses explicitly,
 /// but keeping the canonical port here prevents drift across layers.
@@ -287,11 +287,12 @@ pub fn push_video_frame(
     Ok(())
 }
 
-pub fn push_audio_frame(frame_bytes: Vec<u8>, pts: u64) -> anyhow::Result<()> {
+pub fn push_audio_frame(frame_bytes: Vec<u8>, pts: u64, codec: u8) -> anyhow::Result<()> {
+    let codec = if codec == 0 { AUDIO_CODEC_OPUS } else { codec };
     let frame_len = frame_bytes.len();
     println!(
-        "DEBUG: Rust received AUDIO frame from Dart: {} bytes (pts_us={})",
-        frame_len, pts
+        "DEBUG: Rust received AUDIO frame from Dart: {} bytes (pts_us={}, codec=0x{:02X})",
+        frame_len, pts, codec
     );
     let tx = {
         let guard = audio_frame_tx_slot()
@@ -301,7 +302,7 @@ pub fn push_audio_frame(frame_bytes: Vec<u8>, pts: u64) -> anyhow::Result<()> {
             .clone()
             .context("sender is not active; call start_sankaku_sender first")?
     };
-    tx.send((frame_bytes, pts))
+    tx.send((frame_bytes, pts, codec))
         .map_err(|_| anyhow!("sender audio ingress channel is closed"))?;
     Ok(())
 }
@@ -375,7 +376,7 @@ async fn run_sender_loop(
     );
 
     let (frame_tx, mut frame_rx) = mpsc::unbounded_channel::<(Vec<u8>, bool, u64, u8)>();
-    let (audio_tx, mut audio_rx) = mpsc::unbounded_channel::<(Vec<u8>, u64)>();
+    let (audio_tx, mut audio_rx) = mpsc::unbounded_channel::<(Vec<u8>, u64, u8)>();
     install_hevc_frame_tx(frame_tx)?;
     install_audio_frame_tx(audio_tx)?;
     let _frame_ingress_guard = FrameIngressGuard;
@@ -404,17 +405,20 @@ async fn run_sender_loop(
                 ).await?;
                 sent_packets = sent_packets.saturating_add(1);
             }
-            Some((audio_bytes, pts)) = audio_rx.recv() => {
+            Some((audio_bytes, pts, codec)) = audio_rx.recv() => {
                 if audio_bytes.is_empty() {
                     continue;
                 }
 
                 let audio_len = audio_bytes.len();
-                match sender.send_audio_frame(audio_stream_id, pts, audio_bytes).await {
+                match sender
+                    .send_audio_frame(audio_stream_id, pts, codec, audio_bytes)
+                    .await
+                {
                     Ok(_) => {
                         println!(
-                            "DEBUG: Sankaku sender sent AUDIO packet: stream_id={} bytes={} pts_us={} dest={}",
-                            audio_stream_id, audio_len, pts, dest
+                            "DEBUG: Sankaku sender sent AUDIO packet: stream_id={} bytes={} pts_us={} codec=0x{:02X} dest={}",
+                            audio_stream_id, audio_len, pts, codec, dest
                         );
                         sent_packets = sent_packets.saturating_add(1);
                     }

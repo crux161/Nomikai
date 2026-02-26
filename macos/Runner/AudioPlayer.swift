@@ -2,19 +2,22 @@ import AVFoundation
 import Foundation
 
 private enum AudioPlayerError: LocalizedError {
-  case unsupportedAacFormat
+  case unsupportedOpusFormat
+  case opusRequiresMacOS12
   case unsupportedPcmFormat
   case converterUnavailable
   case pcmBufferAllocationFailed
 
   var errorDescription: String? {
     switch self {
-    case .unsupportedAacFormat:
-      return "Unable to construct AAC playback format for native audio output."
+    case .unsupportedOpusFormat:
+      return "Unable to construct Opus playback format for native audio output."
+    case .opusRequiresMacOS12:
+      return "Native Opus audio playback requires macOS 12 or later."
     case .unsupportedPcmFormat:
       return "Unable to construct PCM playback format for native audio output."
     case .converterUnavailable:
-      return "Unable to initialize AAC to PCM converter."
+      return "Unable to initialize Opus to PCM converter."
     case .pcmBufferAllocationFailed:
       return "Unable to allocate PCM playback buffer."
     }
@@ -22,9 +25,10 @@ private enum AudioPlayerError: LocalizedError {
 }
 
 final class AudioPlayer {
-  private static let aacSampleRateHz: Double = 48_000
-  private static let aacChannelCount: AVAudioChannelCount = 1
-  private static let aacBitrateBps = 64_000
+  private static let opusSampleRateHz: Double = 48_000
+  private static let opusChannelCount: AVAudioChannelCount = 1
+  private static let opusBitrateBps = 64_000
+  private static let opusFramesPerPacket: UInt32 = 960
   private static let gateBypassStallUs: UInt64 = 750_000
   private static let gateBlockLogIntervalUs: UInt64 = 250_000
   private static let gateBypassQueueDepth = 10
@@ -39,7 +43,7 @@ final class AudioPlayer {
   private let playerNode = AVAudioPlayerNode()
   private let syncClock: PlaybackSyncClock
 
-  private let aacFormat: AVAudioFormat
+  private let opusFormat: AVAudioFormat
   private let pcmFormat: AVAudioFormat
   private let converter: AVAudioConverter
   private var isStarted = false
@@ -51,41 +55,44 @@ final class AudioPlayer {
 
   init(syncClock: PlaybackSyncClock) throws {
     self.syncClock = syncClock
+    guard #available(macOS 12.0, *) else {
+      throw AudioPlayerError.opusRequiresMacOS12
+    }
     guard
-      let aacFormat = AVAudioFormat(
+      let opusFormat = AVAudioFormat(
         settings: [
-          AVFormatIDKey: kAudioFormatMPEG4AAC,
-          AVSampleRateKey: Self.aacSampleRateHz,
-          AVNumberOfChannelsKey: Self.aacChannelCount,
-          AVEncoderBitRateKey: Self.aacBitrateBps,
+          AVFormatIDKey: kAudioFormatOpus,
+          AVSampleRateKey: Self.opusSampleRateHz,
+          AVNumberOfChannelsKey: Self.opusChannelCount,
+          AVEncoderBitRateKey: Self.opusBitrateBps,
         ]
       )
     else {
-      throw AudioPlayerError.unsupportedAacFormat
+      throw AudioPlayerError.unsupportedOpusFormat
     }
     guard
       let pcmFormat = AVAudioFormat(
         commonFormat: .pcmFormatFloat32,
-        sampleRate: Self.aacSampleRateHz,
-        channels: Self.aacChannelCount,
+        sampleRate: Self.opusSampleRateHz,
+        channels: Self.opusChannelCount,
         interleaved: false
       )
     else {
       throw AudioPlayerError.unsupportedPcmFormat
     }
-    guard let converter = AVAudioConverter(from: aacFormat, to: pcmFormat) else {
+    guard let converter = AVAudioConverter(from: opusFormat, to: pcmFormat) else {
       throw AudioPlayerError.converterUnavailable
     }
 
-    self.aacFormat = aacFormat
+    self.opusFormat = opusFormat
     self.pcmFormat = pcmFormat
     self.converter = converter
 
     NSLog(
-      "AudioPlayer: configured AAC->PCM path (aac=%0.0fHz ch=%u bitrate=%d, pcm=%0.0fHz ch=%u)",
-      Self.aacSampleRateHz,
-      Self.aacChannelCount,
-      Self.aacBitrateBps,
+      "AudioPlayer: configured Opus->PCM path (opus=%0.0fHz ch=%u bitrate=%d, pcm=%0.0fHz ch=%u)",
+      Self.opusSampleRateHz,
+      Self.opusChannelCount,
+      Self.opusBitrateBps,
       pcmFormat.sampleRate,
       pcmFormat.channelCount
     )
@@ -118,21 +125,21 @@ final class AudioPlayer {
     }
   }
 
-  func decodeAndPlay(aacData: Data, ptsUs: UInt64 = 0) {
-    guard !aacData.isEmpty else { return }
+  func decodeAndPlay(opusData: Data, ptsUs: UInt64 = 0) {
+    guard !opusData.isEmpty else { return }
 
     playerQueue.async { [weak self] in
       guard let self else { return }
-      self.enqueueAudioFrameOnQueue(aacData, ptsUs: ptsUs)
+      self.enqueueAudioFrameOnQueue(opusData, ptsUs: ptsUs)
     }
   }
 
-  private func enqueueAudioFrameOnQueue(_ aacData: Data, ptsUs: UInt64) {
+  private func enqueueAudioFrameOnQueue(_ opusData: Data, ptsUs: UInt64) {
     if ptsUs > 0 {
-      NSLog("AudioPlayer: enqueue frame bytes=%d pts_us=%llu", aacData.count, ptsUs)
+      NSLog("AudioPlayer: enqueue frame bytes=%d pts_us=%llu", opusData.count, ptsUs)
     }
 
-    let item = QueuedAudioFrame(ptsUs: ptsUs, data: aacData)
+    let item = QueuedAudioFrame(ptsUs: ptsUs, data: opusData)
     insertQueuedAudioFrame(item)
     ensureDrainTimerOnQueue()
     drainQueuedAudioOnQueue()
@@ -180,7 +187,7 @@ final class AudioPlayer {
       if next.ptsUs == 0 {
         resetGateBlockTrackingOnQueue()
         queuedFrames.removeFirst()
-        decodeAndSchedule(aacData: next.data, ptsUs: 0, bypassedPtsGate: false)
+        decodeAndSchedule(opusData: next.data, ptsUs: 0, bypassedPtsGate: false)
         drainedCount += 1
       } else {
         guard let playablePtsUs = syncClock.playablePtsUpperBoundUs() else {
@@ -196,7 +203,7 @@ final class AudioPlayer {
               next.ptsUs
             )
             queuedFrames.removeFirst()
-            decodeAndSchedule(aacData: next.data, ptsUs: next.ptsUs, bypassedPtsGate: true)
+            decodeAndSchedule(opusData: next.data, ptsUs: next.ptsUs, bypassedPtsGate: true)
             drainedCount += 1
             continue
           }
@@ -218,7 +225,7 @@ final class AudioPlayer {
               playablePtsUs
             )
             queuedFrames.removeFirst()
-            decodeAndSchedule(aacData: next.data, ptsUs: next.ptsUs, bypassedPtsGate: true)
+            decodeAndSchedule(opusData: next.data, ptsUs: next.ptsUs, bypassedPtsGate: true)
             drainedCount += 1
             continue
           }
@@ -227,7 +234,7 @@ final class AudioPlayer {
 
         resetGateBlockTrackingOnQueue()
         queuedFrames.removeFirst()
-        decodeAndSchedule(aacData: next.data, ptsUs: next.ptsUs, bypassedPtsGate: false)
+        decodeAndSchedule(opusData: next.data, ptsUs: next.ptsUs, bypassedPtsGate: false)
         drainedCount += 1
       }
 
@@ -252,29 +259,29 @@ final class AudioPlayer {
     }
   }
 
-  private func decodeAndSchedule(aacData: Data, ptsUs: UInt64, bypassedPtsGate: Bool) {
-    let maximumPacketSize = max(converter.maximumOutputPacketSize, aacData.count)
+  private func decodeAndSchedule(opusData: Data, ptsUs: UInt64, bypassedPtsGate: Bool) {
+    let maximumPacketSize = max(converter.maximumOutputPacketSize, opusData.count)
     let compressedBuffer = AVAudioCompressedBuffer(
-      format: aacFormat,
+      format: opusFormat,
       packetCapacity: 1,
       maximumPacketSize: maximumPacketSize
     )
     compressedBuffer.packetCount = 1
-    compressedBuffer.byteLength = UInt32(aacData.count)
+    compressedBuffer.byteLength = UInt32(opusData.count)
 
-    aacData.withUnsafeBytes { rawBuffer in
+    opusData.withUnsafeBytes { rawBuffer in
       guard let source = rawBuffer.baseAddress else { return }
-      memcpy(compressedBuffer.data, source, aacData.count)
+      memcpy(compressedBuffer.data, source, opusData.count)
     }
 
     if let packetDescriptions = compressedBuffer.packetDescriptions {
       packetDescriptions.pointee = AudioStreamPacketDescription(
         mStartOffset: 0,
-        mVariableFramesInPacket: 1024,
-        mDataByteSize: UInt32(aacData.count)
+        mVariableFramesInPacket: Self.opusFramesPerPacket,
+        mDataByteSize: UInt32(opusData.count)
       )
     } else {
-      NSLog("AudioPlayer: missing packetDescriptions for AAC buffer bytes=%d", aacData.count)
+      NSLog("AudioPlayer: missing packetDescriptions for Opus buffer bytes=%d", opusData.count)
     }
 
     guard let pcmBuffer = AVAudioPCMBuffer(pcmFormat: pcmFormat, frameCapacity: 4096) else {
@@ -296,9 +303,9 @@ final class AudioPlayer {
 
     if status == .error {
       if let convertError {
-        NSLog("AudioPlayer: AAC decode failed: \(convertError)")
+        NSLog("AudioPlayer: Opus decode failed: \(convertError)")
       } else {
-        NSLog("AudioPlayer: AAC decode failed with unknown converter error")
+        NSLog("AudioPlayer: Opus decode failed with unknown converter error")
       }
       converter.reset()
       return
@@ -306,9 +313,9 @@ final class AudioPlayer {
 
     guard pcmBuffer.frameLength > 0 else {
       NSLog(
-        "AudioPlayer: AAC decode produced no PCM (status=%@ bytes=%d pts_us=%llu bypassed=%d)",
+        "AudioPlayer: Opus decode produced no PCM (status=%@ bytes=%d pts_us=%llu bypassed=%d)",
         Self.converterStatusName(status),
-        aacData.count,
+        opusData.count,
         ptsUs,
         bypassedPtsGate ? 1 : 0
       )
@@ -330,11 +337,14 @@ final class AudioPlayer {
     if !playerNode.isPlaying {
       playerNode.play()
     }
+    print(
+      "DEBUG: Audio buffer decoded to PCM and scheduled frames=\(pcmBuffer.frameLength) bytes=\(opusData.count) pts_us=\(ptsUs) bypassed_pts_gate=\(bypassedPtsGate)"
+    )
     if bypassedPtsGate {
       NSLog(
         "AudioPlayer: scheduled audio after PTS gate bypass frames=%u bytes=%d pts_us=%llu",
         pcmBuffer.frameLength,
-        aacData.count,
+        opusData.count,
         ptsUs
       )
     }

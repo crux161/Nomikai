@@ -59,6 +59,7 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
   late final NomikaiDiscoveryService _discoveryService;
 
   final List<double> _byteSamples = <double>[];
+  final List<int> _bitrateWindowBytes = <int>[];
   final List<String> _debugLines = <String>[];
 
   StreamSubscription<UiEvent>? _receiverEventSubscription;
@@ -70,10 +71,10 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
   bool _debugConsoleExpanded = false;
 
   int? _textureId;
-  int _totalBytes = 0;
   int _frameDrops = 0;
   int _bytesSinceTick = 0;
   int _framesSinceTick = 0;
+  int _currentReceiveBitrateBps = 0;
 
   double _currentFps = 0;
   double _packetLossPercent = 0;
@@ -139,6 +140,15 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
       setState(() {
         _currentFps = frames * 2.0;
         _appendMetricSample(bytes.toDouble());
+        _bitrateWindowBytes.add(bytes);
+        if (_bitrateWindowBytes.length > 2) {
+          _bitrateWindowBytes.removeAt(0);
+        }
+        final int windowBytes = _bitrateWindowBytes.fold<int>(
+          0,
+          (sum, sample) => sum + sample,
+        );
+        _currentReceiveBitrateBps = windowBytes * 8;
       });
     });
   }
@@ -148,6 +158,9 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
     _metricsTicker = null;
     _bytesSinceTick = 0;
     _framesSinceTick = 0;
+    _bitrateWindowBytes.clear();
+    _currentReceiveBitrateBps = 0;
+    _currentFps = 0;
   }
 
   Future<void> _toggleReceiver() async {
@@ -256,7 +269,6 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
 
       _stopMetricsTicker();
       _byteSamples.clear();
-      _totalBytes = 0;
       _frameDrops = 0;
       _currentFps = 0;
       _packetLossPercent = 0;
@@ -357,18 +369,17 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
         });
       },
       progress: (streamId, frameIndex, bytes, frames) {
-        setState(() {
-          _statusLog =
-              'stream=$streamId frame=$frameIndex bytes=$bytes totalFrames=$frames';
-        });
+        _debugLog(
+          'DEBUG: Receiver progress stream=$streamId frame=$frameIndex bytes=$bytes totalFrames=$frames',
+        );
       },
       telemetry: (name, value) {
         setState(() {
           if (name == 'packet_loss_ppm') {
             _packetLossPercent = value.toDouble() / 10_000.0;
           }
-          _statusLog = 'Telemetry: $name=$value';
         });
+        _debugLog('DEBUG: Receiver telemetry $name=$value');
       },
       frameDrop: (streamId, reason) {
         setState(() {
@@ -391,10 +402,6 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
       videoFrameReceived: (data, pts) {
         _bytesSinceTick += data.length;
         _framesSinceTick += 1;
-
-        setState(() {
-          _totalBytes += data.length;
-        });
 
         unawaited(
           _playerService.pushFrame(data, ptsUs: pts.toInt()).catchError((
@@ -435,20 +442,6 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
         });
       },
     );
-  }
-
-  String _formatBytes(int bytes) {
-    if (bytes < 1024) {
-      return '$bytes B';
-    }
-
-    final double kb = bytes / 1024;
-    if (kb < 1024) {
-      return '${kb.toStringAsFixed(1)} KB';
-    }
-
-    final double mb = kb / 1024;
-    return '${mb.toStringAsFixed(2)} MB';
   }
 
   Widget _buildControlCard(BuildContext context) {
@@ -554,7 +547,9 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
               ),
               const SizedBox(height: 12),
               Text('Handshake State: $_handshakeState'),
-              Text('Total Bytes Received: ${_formatBytes(_totalBytes)}'),
+              Text(
+                'Current Bitrate: ${(_currentReceiveBitrateBps / 1_000_000).toStringAsFixed(2)} Mbps',
+              ),
               Text('Frame Drops: $_frameDrops'),
               Text('Packet Loss: ${_packetLossPercent.toStringAsFixed(2)}%'),
               Text('Current FPS: ${_currentFps.toStringAsFixed(1)}'),
@@ -802,6 +797,7 @@ class _BroadcastScreenState extends State<BroadcastScreen> {
   bool _isBroadcasting = false;
   bool _isBusy = false;
   bool _isMicrophoneMuted = false;
+  bool _isAudioOnlyCall = false;
   bool _isCaptureActive = false;
   bool _debugConsoleExpanded = false;
   bool _senderHandshakeCompleted = false;
@@ -1129,9 +1125,11 @@ class _BroadcastScreenState extends State<BroadcastScreen> {
         'DEBUG: Requesting Mic Permissions / starting native capture...',
       );
       try {
-        await _hevcService.startRecording();
+        await _hevcService.startRecording(audioOnly: _isAudioOnlyCall);
         _isCaptureActive = true;
-        _debugLog('DEBUG: Native capture initialized.');
+        _debugLog(
+          'DEBUG: Native capture initialized (audioOnly=$_isAudioOnlyCall).',
+        );
       } catch (error) {
         _isCaptureActive = false;
         audioInitError = error;
@@ -1149,7 +1147,9 @@ class _BroadcastScreenState extends State<BroadcastScreen> {
         _currentBitrateBps = 0;
         _activeDestination = destination;
         _statusLog = audioInitError == null
-            ? 'Broadcast live to $destination.'
+            ? (_isAudioOnlyCall
+                  ? 'Audio-only call live to $destination.'
+                  : 'Broadcast live to $destination.')
             : 'Broadcast control channel live to $destination. Capture unavailable: $audioInitError';
       });
       _armSenderHandshakeTimeout(destination);
@@ -1259,12 +1259,15 @@ class _BroadcastScreenState extends State<BroadcastScreen> {
         },
         progress: (streamId, frameIndex, bytes, frames) {
           _progress = ((frameIndex.toInt() + 1) % 100) / 100.0;
-          _statusLog =
-              'Broadcast stream=$streamId frame=$frameIndex bytes=$bytes frames=$frames';
+          _debugLog(
+            'DEBUG: Sender progress stream=$streamId frame=$frameIndex bytes=$bytes frames=$frames',
+          );
         },
-        telemetry: (name, value) => _statusLog = 'Telemetry: $name=$value',
+        telemetry: (name, value) {
+          _debugLog('DEBUG: Sender telemetry $name=$value');
+        },
         frameDrop: (streamId, reason) {
-          _statusLog = 'Frame drop on stream $streamId: $reason';
+          _debugLog('DEBUG: Sender frame drop stream=$streamId: $reason');
         },
         fault: (code, message) {
           if (!_senderHandshakeCompleted) {
@@ -1276,16 +1279,22 @@ class _BroadcastScreenState extends State<BroadcastScreen> {
         },
         bitrateChanged: (bitrateBps) {
           _currentBitrateBps = bitrateBps;
-          bitrateToApply = bitrateBps;
-          _statusLog =
-              'Adaptive bitrate set to ${(bitrateBps / 1_000_000).toStringAsFixed(2)} Mbps';
+          if (!_isAudioOnlyCall) {
+            bitrateToApply = bitrateBps;
+          }
+          _statusLog = _isAudioOnlyCall
+              ? 'Audio-only call connected. Transport bitrate ${(bitrateBps / 1_000_000).toStringAsFixed(2)} Mbps'
+              : 'Adaptive bitrate set to ${(bitrateBps / 1_000_000).toStringAsFixed(2)} Mbps';
         },
         videoFrameReceived: (data, pts) {
-          _statusLog =
-              'Preview frame received (${data.length} bytes, pts=$pts).';
+          _debugLog(
+            'DEBUG: Sender loop observed video frame event (${data.length} bytes, pts=$pts)',
+          );
         },
         audioFrameReceived: (data, pts) {
-          _statusLog = 'Audio packet sent (${data.length} bytes, pts=$pts).';
+          _debugLog(
+            'DEBUG: Sender loop observed audio packet event (${data.length} bytes, pts=$pts)',
+          );
         },
         error: (msg) {
           _cancelSenderHandshakeTimeout();
@@ -1422,6 +1431,16 @@ class _BroadcastScreenState extends State<BroadcastScreen> {
       _isMicrophoneMuted = muted;
     });
     _hevcService.setMicrophoneMuted(muted);
+  }
+
+  void _setAudioOnlyCall(bool enabled) {
+    if (_isBusy || _isBroadcasting) {
+      return;
+    }
+    setState(() {
+      _isAudioOnlyCall = enabled;
+    });
+    _debugLog('DEBUG: Audio-only call mode set to $enabled');
   }
 
   Widget _buildManualDialCard(BuildContext context) {
@@ -1679,9 +1698,22 @@ class _BroadcastScreenState extends State<BroadcastScreen> {
               const SizedBox(height: 8),
               Card(
                 child: SwitchListTile.adaptive(
+                  title: const Text('Audio-Only Call'),
+                  subtitle: const Text(
+                    'Skip camera/HEVC capture and stream microphone Opus only.',
+                  ),
+                  value: _isAudioOnlyCall,
+                  onChanged: _isBusy || _isBroadcasting
+                      ? null
+                      : _setAudioOnlyCall,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Card(
+                child: SwitchListTile.adaptive(
                   title: const Text('Mute Microphone'),
                   subtitle: const Text(
-                    'Stop forwarding iOS microphone AAC packets to Rust.',
+                    'Stop forwarding iOS microphone Opus packets to Rust.',
                   ),
                   value: _isMicrophoneMuted,
                   onChanged: _isBusy ? null : _setMicrophoneMuted,

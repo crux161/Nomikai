@@ -182,7 +182,7 @@ class MainFlutterWindow: NSWindow {
           guard let player = self.audioPlayer else {
             throw HevcPlayerChannelError.audioPlayerNotInitialized
           }
-          player.decodeAndPlay(aacData: payload.data, ptsUs: payload.ptsUs)
+          player.decodeAndPlay(opusData: payload.data, ptsUs: payload.ptsUs)
           result(nil)
         } catch {
           result(

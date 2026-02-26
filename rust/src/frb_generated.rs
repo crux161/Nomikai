@@ -103,12 +103,16 @@ fn wire__crate__api__simple__push_audio_frame_impl(
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_frame_bytes = <Vec<u8>>::sse_decode(&mut deserializer);
             let api_pts = <u64>::sse_decode(&mut deserializer);
+            let api_codec = <u8>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
                     (move || {
-                        let output_ok =
-                            crate::api::simple::push_audio_frame(api_frame_bytes, api_pts)?;
+                        let output_ok = crate::api::simple::push_audio_frame(
+                            api_frame_bytes,
+                            api_pts,
+                            api_codec,
+                        )?;
                         Ok(output_ok)
                     })(),
                 )

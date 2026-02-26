@@ -51,7 +51,27 @@ import UIKit
             return
           }
 
-          self.hevcDumper.startRecording { error in
+          let videoEnabled: Bool
+          if
+            let payload = call.arguments as? [String: Any],
+            let requested = payload["videoEnabled"] as? Bool
+          {
+            videoEnabled = requested
+          } else if
+            let payload = call.arguments as? [String: Any],
+            let requested = payload["video_enabled"] as? Bool
+          {
+            videoEnabled = requested
+          } else if
+            let payload = call.arguments as? [String: Any],
+            let requestedAudioOnly = payload["audio_only"] as? Bool
+          {
+            videoEnabled = !requestedAudioOnly
+          } else {
+            videoEnabled = true
+          }
+
+          self.hevcDumper.startRecording(videoEnabled: videoEnabled) { error in
             if let error {
               result(
                 FlutterError(

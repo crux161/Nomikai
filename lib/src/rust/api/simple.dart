@@ -27,9 +27,11 @@ Future<void> pushVideoFrame({
 Future<void> pushAudioFrame({
   required List<int> frameBytes,
   required BigInt pts,
+  required int codec,
 }) => RustLib.instance.api.crateApiSimplePushAudioFrame(
   frameBytes: frameBytes,
   pts: pts,
+  codec: codec,
 );
 
 Future<void> stopSankakuSender() =>

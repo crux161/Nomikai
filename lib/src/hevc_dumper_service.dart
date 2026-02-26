@@ -8,6 +8,7 @@ import 'package:nomikai/src/rust/api/simple.dart';
 
 class HevcDumperService {
   static const int _videoCodecHevc = 0x01;
+  static const int _audioCodecOpus = 0x03;
   static const MethodChannel _channel = MethodChannel(
     'com.nomikai.sankaku/hevc_dumper',
   );
@@ -29,14 +30,21 @@ class HevcDumperService {
     _microphoneMuted = muted;
   }
 
-  Future<void> startRecording() async {
+  Future<void> startRecording({
+    bool videoEnabled = true,
+    bool? audioOnly,
+  }) async {
     if (!isSupported) {
       throw UnsupportedError('HEVC dumper is only supported on iOS.');
     }
 
     await _ensureStreamSubscriptions();
     try {
-      await _channel.invokeMethod<void>('startRecording');
+      final bool resolvedVideoEnabled =
+          audioOnly == null ? videoEnabled : !audioOnly;
+      await _channel.invokeMethod<void>('startRecording', <String, Object>{
+        'videoEnabled': resolvedVideoEnabled,
+      });
     } catch (_) {
       await _cancelStreamSubscriptions();
       rethrow;
@@ -105,7 +113,7 @@ class HevcDumperService {
         final bytesLength = audioEvent?.bytes.length ?? 0;
         final ptsUs = audioEvent?.ptsUs ?? 0;
         print(
-          'DEBUG: Dart received AUDIO chunk: $bytesLength bytes (pts_us=$ptsUs)',
+          'DEBUG: Dart received AUDIO chunk: $bytesLength bytes (pts_us=$ptsUs, codec=0x${_audioCodecOpus.toRadixString(16).padLeft(2, '0')})',
         );
         _handleAudioPayload(event);
       },
@@ -155,6 +163,7 @@ class HevcDumperService {
       pushAudioFrame(
         frameBytes: audioEvent.bytes,
         pts: BigInt.from(audioEvent.ptsUs),
+        codec: _audioCodecOpus,
       ).catchError((Object error, StackTrace stackTrace) {
         debugPrint('pushAudioFrame failed: $error');
       }),

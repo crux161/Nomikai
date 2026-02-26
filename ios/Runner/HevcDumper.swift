@@ -15,6 +15,7 @@ private enum HevcDumperError: LocalizedError {
   case cannotCreateEncoder(status: OSStatus)
   case cannotSetBitrate(status: OSStatus)
   case cannotCreateAudioConverter
+  case opusRequiresIos15
   case invalidBitrate
   case notRecording
 
@@ -23,7 +24,7 @@ private enum HevcDumperError: LocalizedError {
     case .cameraPermissionDenied:
       return "Camera permission is required to record HEVC."
     case .microphonePermissionDenied:
-      return "Microphone permission is required to capture AAC audio."
+      return "Microphone permission is required to capture Opus audio."
     case .cameraUnavailable:
       return "No usable camera was found on this device."
     case .microphoneUnavailable:
@@ -41,7 +42,9 @@ private enum HevcDumperError: LocalizedError {
     case .cannotSetBitrate(let status):
       return "Failed to update HEVC encoder bitrate (status \(status))."
     case .cannotCreateAudioConverter:
-      return "Failed to create AAC audio converter."
+      return "Failed to create Opus audio converter."
+    case .opusRequiresIos15:
+      return "Native Opus audio capture requires iOS 15 or later."
     case .invalidBitrate:
       return "Bitrate must be a positive integer."
     case .notRecording:
@@ -74,6 +77,7 @@ final class HevcAudioStreamHandler: NSObject, FlutterStreamHandler {
 final class HevcDumper: NSObject, FlutterStreamHandler {
   private static let annexBStartCode = Data([0x00, 0x00, 0x00, 0x01])
   private static let videoCodecHevc: UInt8 = 0x01
+  private static let audioCodecOpus: UInt8 = 0x03
   private static let hevcOutputCallback: VTCompressionOutputCallback = {
     outputCallbackRefCon,
     _,
@@ -105,6 +109,7 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
   private var audioInputFormat: AVAudioFormat?
   private var audioOutputFormat: AVAudioFormat?
   private var audioConverterError: HevcDumperError?
+  private var audioOnlyMode = false
 
   let audioStreamHandler: HevcAudioStreamHandler
 
@@ -153,7 +158,27 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
     }
   }
 
-  func startRecording(completion: @escaping (Error?) -> Void) {
+  func startRecording(videoEnabled: Bool, completion: @escaping (Error?) -> Void) {
+    if !videoEnabled {
+      ensureMediaAuthorization(
+        for: .audio,
+        deniedError: HevcDumperError.microphonePermissionDenied
+      ) { [weak self] audioGranted in
+        guard let self else { return }
+        guard audioGranted else {
+          DispatchQueue.main.async {
+            completion(HevcDumperError.microphonePermissionDenied)
+          }
+          return
+        }
+
+        self.sessionQueue.async {
+          self.startRecordingOnSessionQueue(videoEnabled: false, completion: completion)
+        }
+      }
+      return
+    }
+
     ensureMediaAuthorization(for: .video, deniedError: HevcDumperError.cameraPermissionDenied) {
       [weak self] videoGranted in
       guard let self else { return }
@@ -164,10 +189,10 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
         return
       }
 
-      self.ensureMediaAuthorization(
-        for: .audio,
-        deniedError: HevcDumperError.microphonePermissionDenied
-      ) { audioGranted in
+        self.ensureMediaAuthorization(
+          for: .audio,
+          deniedError: HevcDumperError.microphonePermissionDenied
+        ) { audioGranted in
         guard audioGranted else {
           DispatchQueue.main.async {
             completion(HevcDumperError.microphonePermissionDenied)
@@ -176,10 +201,15 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
         }
 
         self.sessionQueue.async {
-          self.startRecordingOnSessionQueue(completion: completion)
+          self.startRecordingOnSessionQueue(videoEnabled: true, completion: completion)
         }
       }
     }
+  }
+
+  // Backward-compatible wrapper for older call sites that still pass audioOnly.
+  func startRecording(audioOnly: Bool = false, completion: @escaping (Error?) -> Void) {
+    startRecording(videoEnabled: !audioOnly, completion: completion)
   }
 
   func stopRecording(completion: @escaping (Error?) -> Void) {
@@ -207,6 +237,7 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
       self.audioInputFormat = nil
       self.audioOutputFormat = nil
       self.audioConverterError = nil
+      self.audioOnlyMode = false
       self.isRecording = false
       try? AVAudioSession.sharedInstance().setActive(
         false,
@@ -224,6 +255,12 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
       guard bitrate > 0 else {
         DispatchQueue.main.async {
           completion(HevcDumperError.invalidBitrate)
+        }
+        return
+      }
+      if self.audioOnlyMode {
+        DispatchQueue.main.async {
+          completion(nil)
         }
         return
       }
@@ -253,7 +290,10 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
     }
   }
 
-  private func startRecordingOnSessionQueue(completion: @escaping (Error?) -> Void) {
+  private func startRecordingOnSessionQueue(
+    videoEnabled: Bool,
+    completion: @escaping (Error?) -> Void
+  ) {
     guard !isRecording else {
       DispatchQueue.main.async {
         completion(nil)
@@ -262,8 +302,16 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
     }
 
     do {
-      let dimensions = try configureCaptureSession()
-      try configureCompressionSession(width: dimensions.width, height: dimensions.height)
+      self.audioOnlyMode = !videoEnabled
+      let dimensions = try configureCaptureSession(videoEnabled: videoEnabled)
+      if videoEnabled {
+        guard let dimensions else {
+          throw HevcDumperError.cameraUnavailable
+        }
+        try configureCompressionSession(width: dimensions.width, height: dimensions.height)
+      } else {
+        compressionSession = nil
+      }
 
       isRecording = true
       captureSession.startRunning()
@@ -279,13 +327,34 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
     }
   }
 
-  private func configureCaptureSession() throws -> CMVideoDimensions {
+  private func configureCaptureSession(videoEnabled: Bool) throws -> CMVideoDimensions? {
     captureSession.beginConfiguration()
     defer { captureSession.commitConfiguration() }
 
-    captureSession.sessionPreset = .hd1280x720
+    captureSession.sessionPreset = videoEnabled ? .hd1280x720 : .high
     captureSession.inputs.forEach { captureSession.removeInput($0) }
     captureSession.outputs.forEach { captureSession.removeOutput($0) }
+
+    guard let microphone = AVCaptureDevice.default(for: .audio) else {
+      throw HevcDumperError.microphoneUnavailable
+    }
+
+    let audioInput = try AVCaptureDeviceInput(device: microphone)
+    guard captureSession.canAddInput(audioInput) else {
+      throw HevcDumperError.cannotAddAudioInput
+    }
+    captureSession.addInput(audioInput)
+
+    audioOutput.setSampleBufferDelegate(self, queue: sessionQueue)
+    guard captureSession.canAddOutput(audioOutput) else {
+      throw HevcDumperError.cannotAddAudioOutput
+    }
+    captureSession.addOutput(audioOutput)
+
+    videoOutput.setSampleBufferDelegate(nil, queue: nil)
+    guard videoEnabled else {
+      return nil
+    }
 
     guard
       let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
@@ -310,22 +379,6 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
       throw HevcDumperError.cannotAddOutput
     }
     captureSession.addOutput(videoOutput)
-
-    guard let microphone = AVCaptureDevice.default(for: .audio) else {
-      throw HevcDumperError.microphoneUnavailable
-    }
-
-    let audioInput = try AVCaptureDeviceInput(device: microphone)
-    guard captureSession.canAddInput(audioInput) else {
-      throw HevcDumperError.cannotAddAudioInput
-    }
-    captureSession.addInput(audioInput)
-
-    audioOutput.setSampleBufferDelegate(self, queue: sessionQueue)
-    guard captureSession.canAddOutput(audioOutput) else {
-      throw HevcDumperError.cannotAddAudioOutput
-    }
-    captureSession.addOutput(audioOutput)
 
     return CMVideoFormatDescriptionGetDimensions(camera.activeFormat.formatDescription)
   }
@@ -390,6 +443,7 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
     audioInputFormat = nil
     audioOutputFormat = nil
     audioConverterError = nil
+    audioOnlyMode = false
     isRecording = false
   }
 
@@ -487,13 +541,13 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
       let converter = try ensureAudioConverter(for: sampleBuffer)
       guard
         let pcmBuffer = makePcmBuffer(from: sampleBuffer, format: converter.inputFormat),
-        let aacBytes = encodeAac(from: pcmBuffer, using: converter),
-        !aacBytes.isEmpty
+        let opusBytes = encodeOpus(from: pcmBuffer, using: converter),
+        !opusBytes.isEmpty
       else {
         return
       }
 
-      emitAudioFrame(aacBytes, ptsUs: ptsUs)
+      emitAudioFrame(opusBytes, ptsUs: ptsUs)
     } catch {
       if let dumpError = error as? HevcDumperError {
         audioConverterError = dumpError
@@ -508,6 +562,7 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
       eventSink([
         "bytes": FlutterStandardTypedData(bytes: data),
         "pts": NSNumber(value: ptsUs),
+        "codec": NSNumber(value: Self.audioCodecOpus),
       ])
     }
   }
@@ -553,13 +608,17 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
       return audioConverter
     }
 
+    guard #available(iOS 15.0, *) else {
+      throw HevcDumperError.opusRequiresIos15
+    }
+
     guard
       let outputFormat = AVAudioFormat(
         settings: [
-          AVFormatIDKey: kAudioFormatMPEG4AAC,
+          AVFormatIDKey: kAudioFormatOpus,
           AVSampleRateKey: 48_000,
           AVNumberOfChannelsKey: 1,
-          AVEncoderBitRateKey: 64_000,
+          AVEncoderBitRateKey: 32_000,
         ]
       ),
       let converter = AVAudioConverter(from: inputFormat, to: outputFormat)
@@ -613,7 +672,7 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
     return pcmBuffer
   }
 
-  private func encodeAac(from pcmBuffer: AVAudioPCMBuffer, using converter: AVAudioConverter)
+  private func encodeOpus(from pcmBuffer: AVAudioPCMBuffer, using converter: AVAudioConverter)
     -> Data?
   {
     let packetCapacity = max(
@@ -641,7 +700,7 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
 
     if status == .error {
       if let conversionError {
-        NSLog("HevcDumper: AAC conversion failed: \(conversionError)")
+        NSLog("HevcDumper: Opus conversion failed: \(conversionError)")
       }
       return nil
     }

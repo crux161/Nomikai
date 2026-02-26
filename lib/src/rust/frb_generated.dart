@@ -82,6 +82,7 @@ abstract class RustLibApi extends BaseApi {
   Future<void> crateApiSimplePushAudioFrame({
     required List<int> frameBytes,
     required BigInt pts,
+    required int codec,
   });
 
   Future<void> crateApiSimplePushVideoFrame({
@@ -145,6 +146,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   Future<void> crateApiSimplePushAudioFrame({
     required List<int> frameBytes,
     required BigInt pts,
+    required int codec,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -152,6 +154,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_list_prim_u_8_loose(frameBytes, serializer);
           sse_encode_u_64(pts, serializer);
+          sse_encode_u_8(codec, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -164,7 +167,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_AnyhowException,
         ),
         constMeta: kCrateApiSimplePushAudioFrameConstMeta,
-        argValues: [frameBytes, pts],
+        argValues: [frameBytes, pts, codec],
         apiImpl: this,
       ),
     );
@@ -173,7 +176,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiSimplePushAudioFrameConstMeta =>
       const TaskConstMeta(
         debugName: "push_audio_frame",
-        argNames: ["frameBytes", "pts"],
+        argNames: ["frameBytes", "pts", "codec"],
       );
 
   @override

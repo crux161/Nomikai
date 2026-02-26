@@ -26,7 +26,10 @@ final class HevcPlayer: NSObject, FlutterTexture {
     let ptsUs: UInt64
     let data: Data
     let containsKeyframe: Bool
+    let arrivalMonotonicUs: UInt64
   }
+
+  private static let reorderHoldTimeoutUs: UInt64 = 50_000
 
   private static let decodeCallback: VTDecompressionOutputCallback = {
     outputCallbackRefCon,
@@ -66,6 +69,7 @@ final class HevcPlayer: NSObject, FlutterTexture {
   private var needsSessionRebuild = true
   private var renderTimer: DispatchSourceTimer?
   private var queuedFrames: [QueuedVideoFrame] = []
+  private var lastDecodedPtsUs: UInt64 = 0
 
   init(textureRegistry: FlutterTextureRegistry, syncClock: PlaybackSyncClock) {
     self.textureRegistry = textureRegistry
@@ -115,7 +119,12 @@ final class HevcPlayer: NSObject, FlutterTexture {
       )
     }
 
-    let item = QueuedVideoFrame(ptsUs: ptsUs, data: frameData, containsKeyframe: containsKeyframe)
+    let item = QueuedVideoFrame(
+      ptsUs: ptsUs,
+      data: frameData,
+      containsKeyframe: containsKeyframe,
+      arrivalMonotonicUs: Self.monotonicNowUs()
+    )
     insertQueuedFrame(item)
     ensureRenderTimerOnQueue()
     drainQueuedFramesOnQueue()
@@ -151,12 +160,35 @@ final class HevcPlayer: NSObject, FlutterTexture {
 
     while !queuedFrames.isEmpty {
       let next = queuedFrames[0]
+      let nowUs = Self.monotonicNowUs()
 
       if next.ptsUs == 0 {
         queuedFrames.removeFirst()
         decodeAnnexBFrameOnQueue(next.data, ptsUs: 0)
         drainedCount += 1
         continue
+      }
+
+      if lastDecodedPtsUs > 0 && next.ptsUs <= lastDecodedPtsUs {
+        NSLog(
+          "HevcPlayer: dropping stale out-of-order frame pts_us=%llu last_decoded_pts_us=%llu",
+          next.ptsUs,
+          lastDecodedPtsUs
+        )
+        queuedFrames.removeFirst()
+        continue
+      }
+
+      if queuedFrames.count == 1 {
+        let ageUs = nowUs >= next.arrivalMonotonicUs ? nowUs - next.arrivalMonotonicUs : 0
+        if ageUs < Self.reorderHoldTimeoutUs {
+          break
+        }
+        NSLog(
+          "HevcPlayer: reorder timeout flush pts_us=%llu age_us=%llu (assuming missing earlier frame dropped)",
+          next.ptsUs,
+          ageUs
+        )
       }
 
       if next.containsKeyframe {
@@ -181,6 +213,7 @@ final class HevcPlayer: NSObject, FlutterTexture {
       }
 
       queuedFrames.removeFirst()
+      lastDecodedPtsUs = next.ptsUs
       decodeAnnexBFrameOnQueue(next.data, ptsUs: next.ptsUs)
       drainedCount += 1
 
@@ -451,6 +484,10 @@ final class HevcPlayer: NSObject, FlutterTexture {
 
     let clamped = ptsUs > UInt64(Int64.max) ? UInt64(Int64.max) : ptsUs
     return CMTime(value: Int64(clamped), timescale: 1_000_000)
+  }
+
+  private static func monotonicNowUs() -> UInt64 {
+    DispatchTime.now().uptimeNanoseconds / 1_000
   }
 
   private func containsIrapFrame(_ frameData: Data) -> Bool {
