@@ -22,9 +22,14 @@ class HevcDumperService {
   StreamSubscription<dynamic>? _hevcStreamSubscription;
   StreamSubscription<dynamic>? _audioStreamSubscription;
   bool _microphoneMuted = false;
+  void Function(String message)? _debugLogger;
 
   bool get isSupported =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
+
+  void setDebugLogger(void Function(String message)? logger) {
+    _debugLogger = logger;
+  }
 
   void setMicrophoneMuted(bool muted) {
     _microphoneMuted = muted;
@@ -40,8 +45,9 @@ class HevcDumperService {
 
     await _ensureStreamSubscriptions();
     try {
-      final bool resolvedVideoEnabled =
-          audioOnly == null ? videoEnabled : !audioOnly;
+      final bool resolvedVideoEnabled = audioOnly == null
+          ? videoEnabled
+          : !audioOnly;
       await _channel.invokeMethod<void>('startRecording', <String, Object>{
         'videoEnabled': resolvedVideoEnabled,
       });
@@ -88,16 +94,16 @@ class HevcDumperService {
             final bytesLength = _decodeBytes(event['bytes'])?.length ?? 0;
             final ptsUs = _decodePts(event['pts']) ?? 0;
             final codec = _decodeCodec(event['codec']) ?? _videoCodecHevc;
-            print(
+            _log(
               'DEBUG: Dart received VIDEO chunk: $bytesLength bytes (Keyframe: ${event['is_keyframe']}, pts_us=$ptsUs, codec=0x${codec.toRadixString(16).padLeft(2, '0')})',
             );
           } else {
-            print('DEBUG: Dart received VIDEO chunk: 0 bytes (Keyframe: null)');
+            _log('DEBUG: Dart received VIDEO chunk: 0 bytes (Keyframe: null)');
           }
           _handleHevcPayload(event);
         },
         onError: (Object error, StackTrace stackTrace) {
-          debugPrint('HEVC stream error: $error');
+          _log('HEVC stream error: $error');
         },
         cancelOnError: false,
       );
@@ -112,13 +118,14 @@ class HevcDumperService {
         final audioEvent = _decodeAudioFrameEvent(event);
         final bytesLength = audioEvent?.bytes.length ?? 0;
         final ptsUs = audioEvent?.ptsUs ?? 0;
-        print(
-          'DEBUG: Dart received AUDIO chunk: $bytesLength bytes (pts_us=$ptsUs, codec=0x${_audioCodecOpus.toRadixString(16).padLeft(2, '0')})',
+        final framesPerPacket = audioEvent?.framesPerPacket ?? 0;
+        _log(
+          'DEBUG: Dart received AUDIO chunk: $bytesLength bytes (pts_us=$ptsUs, frames_per_packet=$framesPerPacket, codec=0x${_audioCodecOpus.toRadixString(16).padLeft(2, '0')})',
         );
         _handleAudioPayload(event);
       },
       onError: (Object error, StackTrace stackTrace) {
-        debugPrint('Audio stream error: $error');
+        _log('Audio stream error: $error');
       },
       cancelOnError: false,
     );
@@ -144,7 +151,7 @@ class HevcDumperService {
         pts: BigInt.from(frameEvent.ptsUs),
         codec: frameEvent.codec,
       ).catchError((Object error, StackTrace stackTrace) {
-        debugPrint('pushVideoFrame failed: $error');
+        _log('pushVideoFrame failed: $error');
       }),
     );
   }
@@ -164,10 +171,16 @@ class HevcDumperService {
         frameBytes: audioEvent.bytes,
         pts: BigInt.from(audioEvent.ptsUs),
         codec: _audioCodecOpus,
+        framesPerPacket: audioEvent.framesPerPacket,
       ).catchError((Object error, StackTrace stackTrace) {
-        debugPrint('pushAudioFrame failed: $error');
+        _log('pushAudioFrame failed: $error');
       }),
     );
+  }
+
+  void _log(String message) {
+    print(message);
+    _debugLogger?.call(message);
   }
 
   _HevcFrameEvent? _decodeFrameEvent(dynamic event) {
@@ -202,14 +215,23 @@ class HevcDumperService {
         return null;
       }
       final ptsUs = _decodePts(event['pts']) ?? 0;
-      return _AudioFrameEvent(bytes: bytes, ptsUs: ptsUs);
+      final framesPerPacket =
+          _decodeFramesPerPacket(
+            event['frames_per_packet'] ?? event['framesPerPacket'],
+          ) ??
+          0;
+      return _AudioFrameEvent(
+        bytes: bytes,
+        ptsUs: ptsUs,
+        framesPerPacket: framesPerPacket,
+      );
     }
 
     final bytes = _decodeBytes(event);
     if (bytes == null) {
       return null;
     }
-    return _AudioFrameEvent(bytes: bytes, ptsUs: 0);
+    return _AudioFrameEvent(bytes: bytes, ptsUs: 0, framesPerPacket: 0);
   }
 
   Uint8List? _decodeBytes(dynamic event) {
@@ -244,6 +266,17 @@ class HevcDumperService {
     }
     return null;
   }
+
+  int? _decodeFramesPerPacket(dynamic value) {
+    if (value is int) {
+      return value > 0 ? value : 0;
+    }
+    if (value is num) {
+      final int parsed = value.toInt();
+      return parsed > 0 ? parsed : 0;
+    }
+    return null;
+  }
 }
 
 class _HevcFrameEvent {
@@ -261,8 +294,13 @@ class _HevcFrameEvent {
 }
 
 class _AudioFrameEvent {
-  const _AudioFrameEvent({required this.bytes, required this.ptsUs});
+  const _AudioFrameEvent({
+    required this.bytes,
+    required this.ptsUs,
+    required this.framesPerPacket,
+  });
 
   final Uint8List bytes;
   final int ptsUs;
+  final int framesPerPacket;
 }

@@ -3,16 +3,17 @@ use anyhow::{anyhow, bail, Context};
 use flutter_rust_bridge::frb;
 use sankaku_core::{
     KyuEvent as SankakuEvent, SankakuReceiver, SankakuSender, StreamType, VideoFrame,
-    AUDIO_CODEC_OPUS, VIDEO_CODEC_HEVC,
+    AUDIO_CODEC_DEBUG_TEXT, AUDIO_CODEC_OPUS, VIDEO_CODEC_HEVC,
 };
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::task::spawn_blocking;
 
 type HevcFrameTx = UnboundedSender<(Vec<u8>, bool, u64, u8)>;
-type AudioFrameTx = UnboundedSender<(Vec<u8>, u64, u8)>;
+type AudioFrameTx = UnboundedSender<(Vec<u8>, u64, u8, u32)>;
 
 /// Sankaku protocol defaults. Dart currently passes bind/dial addresses explicitly,
 /// but keeping the canonical port here prevents drift across layers.
@@ -73,6 +74,7 @@ pub enum UiEvent {
     AudioFrameReceived {
         data: Vec<u8>,
         pts: u64,
+        frames_per_packet: u32,
     },
     Error {
         msg: String,
@@ -178,6 +180,436 @@ impl Drop for ReceiverRunGuard {
     }
 }
 
+const DEBUG_REPORT_MAGIC: &[u8; 4] = b"NRPT";
+const DEBUG_REPORT_PROTOCOL_VERSION: u8 = 1;
+const DEBUG_REPORT_PACKET_BEGIN: u8 = 0x01;
+const DEBUG_REPORT_PACKET_CHUNK: u8 = 0x02;
+const DEBUG_REPORT_PACKET_END: u8 = 0x03;
+
+struct RemoteDebugReportAssembly {
+    report_id: u32,
+    filename: String,
+    total_chunks: u32,
+    expected_bytes: u32,
+    chunks: BTreeMap<u32, Vec<u8>>,
+}
+
+fn parse_u16_le(bytes: &[u8]) -> Option<u16> {
+    let array: [u8; 2] = bytes.get(..2)?.try_into().ok()?;
+    Some(u16::from_le_bytes(array))
+}
+
+fn parse_u32_le(bytes: &[u8]) -> Option<u32> {
+    let array: [u8; 4] = bytes.get(..4)?.try_into().ok()?;
+    Some(u32::from_le_bytes(array))
+}
+
+fn emit_remote_report_text_lines(sink: &StreamSink<UiEvent>, payload: &[u8]) {
+    let text = String::from_utf8_lossy(payload);
+    for line in text.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        sink_event(
+            sink,
+            UiEvent::Log {
+                msg: format!("[RemoteReport] {line}"),
+            },
+        );
+    }
+    if text.ends_with('\n') {
+        sink_event(
+            sink,
+            UiEvent::Log {
+                msg: "[RemoteReport] <blank line>".to_string(),
+            },
+        );
+    }
+}
+
+fn sanitize_debug_report_filename(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
+            out.push(ch);
+        } else {
+            out.push('_');
+        }
+    }
+    let trimmed = out.trim_matches('_');
+    if trimmed.is_empty() {
+        "nomikai_sender_report.log".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn save_remote_debug_report_file(assembly: &RemoteDebugReportAssembly) -> anyhow::Result<String> {
+    let mut data = Vec::new();
+    if assembly.total_chunks > 0 {
+        for seq in 0..assembly.total_chunks {
+            let chunk = assembly
+                .chunks
+                .get(&seq)
+                .with_context(|| format!("missing debug report chunk {seq}"))?;
+            data.extend_from_slice(chunk);
+        }
+    }
+
+    if assembly.expected_bytes != 0 && data.len() != assembly.expected_bytes as usize {
+        bail!(
+            "debug report byte length mismatch (expected={}, actual={})",
+            assembly.expected_bytes,
+            data.len()
+        );
+    }
+
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir());
+    let mut reports_dir = cwd.join("remote_reports");
+    if std::fs::create_dir_all(&reports_dir).is_err() {
+        reports_dir = std::env::temp_dir().join("nomikai_remote_reports");
+        std::fs::create_dir_all(&reports_dir)
+            .context("failed to create remote debug report output dir")?;
+    }
+
+    let ts_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let mut filename = sanitize_debug_report_filename(&assembly.filename);
+    if let Some((stem, ext)) = filename.rsplit_once('.') {
+        filename = format!("{stem}_{ts_ms}.{ext}");
+    } else {
+        filename = format!("{filename}_{ts_ms}.log");
+    }
+
+    let path = reports_dir.join(filename);
+    std::fs::write(&path, data).context("failed to write remote debug report file")?;
+    Ok(path.display().to_string())
+}
+
+fn handle_remote_debug_report_payload(
+    sink: &StreamSink<UiEvent>,
+    payload: &[u8],
+    assembly: &mut Option<RemoteDebugReportAssembly>,
+) {
+    if payload.len() < 6 || payload.get(..4) != Some(DEBUG_REPORT_MAGIC) {
+        emit_remote_report_text_lines(sink, payload);
+        sink_event(
+            sink,
+            UiEvent::Telemetry {
+                name: "debug_report_bytes".to_string(),
+                value: payload.len() as u64,
+            },
+        );
+        return;
+    }
+
+    if payload.len() < 10 {
+        sink_event(
+            sink,
+            UiEvent::Log {
+                msg: "[RemoteReport] malformed packet: header too short".to_string(),
+            },
+        );
+        return;
+    }
+
+    let version = payload[4];
+    let packet_type = payload[5];
+    let Some(report_id) = parse_u32_le(&payload[6..10]) else {
+        sink_event(
+            sink,
+            UiEvent::Log {
+                msg: "[RemoteReport] malformed packet: invalid report id".to_string(),
+            },
+        );
+        return;
+    };
+
+    if version != DEBUG_REPORT_PROTOCOL_VERSION {
+        sink_event(
+            sink,
+            UiEvent::Log {
+                msg: format!(
+                    "[RemoteReport] unsupported protocol version {} (expected {})",
+                    version, DEBUG_REPORT_PROTOCOL_VERSION
+                ),
+            },
+        );
+        return;
+    }
+
+    match packet_type {
+        DEBUG_REPORT_PACKET_BEGIN => {
+            if payload.len() < 20 {
+                sink_event(
+                    sink,
+                    UiEvent::Log {
+                        msg: "[RemoteReport] malformed BEGIN packet".to_string(),
+                    },
+                );
+                return;
+            }
+            let Some(total_chunks) = parse_u32_le(&payload[10..14]) else {
+                return;
+            };
+            let Some(expected_bytes) = parse_u32_le(&payload[14..18]) else {
+                return;
+            };
+            let Some(filename_len) = parse_u16_le(&payload[18..20]) else {
+                return;
+            };
+            let filename_end = 20usize.saturating_add(filename_len as usize);
+            let Some(filename_bytes) = payload.get(20..filename_end) else {
+                sink_event(
+                    sink,
+                    UiEvent::Log {
+                        msg: "[RemoteReport] malformed BEGIN packet filename".to_string(),
+                    },
+                );
+                return;
+            };
+            let filename = String::from_utf8_lossy(filename_bytes).to_string();
+
+            if let Some(existing) = assembly.take() {
+                sink_event(
+                    sink,
+                    UiEvent::Log {
+                        msg: format!(
+                            "[RemoteReport] dropping incomplete report id={} while starting new report id={}",
+                            existing.report_id, report_id
+                        ),
+                    },
+                );
+            }
+
+            *assembly = Some(RemoteDebugReportAssembly {
+                report_id,
+                filename: if filename.is_empty() {
+                    "nomikai_sender_report.log".to_string()
+                } else {
+                    filename
+                },
+                total_chunks,
+                expected_bytes,
+                chunks: BTreeMap::new(),
+            });
+
+            sink_event(
+                sink,
+                UiEvent::Log {
+                    msg: format!(
+                        "[RemoteReport] begin id={} file={} chunks={} bytes={}",
+                        report_id,
+                        assembly
+                            .as_ref()
+                            .map(|a| a.filename.as_str())
+                            .unwrap_or("unknown"),
+                        total_chunks,
+                        expected_bytes
+                    ),
+                },
+            );
+        }
+        DEBUG_REPORT_PACKET_CHUNK => {
+            if payload.len() < 16 {
+                sink_event(
+                    sink,
+                    UiEvent::Log {
+                        msg: "[RemoteReport] malformed CHUNK packet".to_string(),
+                    },
+                );
+                return;
+            }
+            let Some(seq) = parse_u32_le(&payload[10..14]) else {
+                return;
+            };
+            let Some(chunk_len) = parse_u16_le(&payload[14..16]) else {
+                return;
+            };
+            let chunk_end = 16usize.saturating_add(chunk_len as usize);
+            let Some(chunk_bytes) = payload.get(16..chunk_end) else {
+                sink_event(
+                    sink,
+                    UiEvent::Log {
+                        msg: format!("[RemoteReport] malformed CHUNK packet seq={seq}"),
+                    },
+                );
+                return;
+            };
+
+            let Some(active) = assembly.as_mut() else {
+                sink_event(
+                    sink,
+                    UiEvent::Log {
+                        msg: format!(
+                            "[RemoteReport] dropped chunk seq={} for report id={} (no active report)",
+                            seq, report_id
+                        ),
+                    },
+                );
+                return;
+            };
+
+            if active.report_id != report_id {
+                sink_event(
+                    sink,
+                    UiEvent::Log {
+                        msg: format!(
+                            "[RemoteReport] dropped chunk seq={} for report id={} (active id={})",
+                            seq, report_id, active.report_id
+                        ),
+                    },
+                );
+                return;
+            }
+
+            active.chunks.entry(seq).or_insert_with(|| chunk_bytes.to_vec());
+            sink_event(
+                sink,
+                UiEvent::Telemetry {
+                    name: "debug_report_bytes".to_string(),
+                    value: chunk_bytes.len() as u64,
+                },
+            );
+        }
+        DEBUG_REPORT_PACKET_END => {
+            if payload.len() < 18 {
+                sink_event(
+                    sink,
+                    UiEvent::Log {
+                        msg: "[RemoteReport] malformed END packet".to_string(),
+                    },
+                );
+                return;
+            }
+            let Some(total_chunks_sent) = parse_u32_le(&payload[10..14]) else {
+                return;
+            };
+            let Some(total_bytes_sent) = parse_u32_le(&payload[14..18]) else {
+                return;
+            };
+
+            let Some(active) = assembly.take() else {
+                sink_event(
+                    sink,
+                    UiEvent::Log {
+                        msg: format!(
+                            "[RemoteReport] END received for report id={} with no active report",
+                            report_id
+                        ),
+                    },
+                );
+                return;
+            };
+
+            if active.report_id != report_id {
+                sink_event(
+                    sink,
+                    UiEvent::Log {
+                        msg: format!(
+                            "[RemoteReport] END report id mismatch active={} received={}",
+                            active.report_id, report_id
+                        ),
+                    },
+                );
+                return;
+            }
+
+            let received_chunk_count = active.chunks.len() as u32;
+            if active.total_chunks != total_chunks_sent || active.expected_bytes != total_bytes_sent {
+                sink_event(
+                    sink,
+                    UiEvent::Log {
+                        msg: format!(
+                            "[RemoteReport] END metadata mismatch id={} begin(chunks={},bytes={}) end(chunks={},bytes={})",
+                            report_id, active.total_chunks, active.expected_bytes, total_chunks_sent, total_bytes_sent
+                        ),
+                    },
+                );
+            }
+
+            if active.total_chunks != received_chunk_count {
+                sink_event(
+                    sink,
+                    UiEvent::Log {
+                        msg: format!(
+                            "[RemoteReport] incomplete report id={} chunks_received={}/{}",
+                            report_id, received_chunk_count, active.total_chunks
+                        ),
+                    },
+                );
+                return;
+            }
+
+            match save_remote_debug_report_file(&active) {
+                Ok(path) => {
+                    sink_event(
+                        sink,
+                        UiEvent::Log {
+                            msg: format!(
+                                "[RemoteReport] saved file path={} bytes={} chunks={}",
+                                path, active.expected_bytes, active.total_chunks
+                            ),
+                        },
+                    );
+                    sink_event(
+                        sink,
+                        UiEvent::Telemetry {
+                            name: "debug_report_saved_bytes".to_string(),
+                            value: active.expected_bytes as u64,
+                        },
+                    );
+                }
+                Err(error) => {
+                    sink_event(
+                        sink,
+                        UiEvent::Error {
+                            msg: format!("remote debug report save failed: {error}"),
+                        },
+                    );
+                }
+            }
+        }
+        _ => {
+            sink_event(
+                sink,
+                UiEvent::Log {
+                    msg: format!("[RemoteReport] unsupported packet type 0x{packet_type:02X}"),
+                },
+            );
+        }
+    }
+}
+
+fn announce_sender_handshake_if_needed(
+    sink: &StreamSink<UiEvent>,
+    sender: &SankakuSender,
+    dest: &str,
+    handshake_announced: &mut bool,
+) {
+    if *handshake_announced {
+        return;
+    }
+    *handshake_announced = true;
+    let session_id = sender.session_id().unwrap_or_default();
+    sink_event(
+        sink,
+        UiEvent::HandshakeComplete {
+            session_id,
+            bootstrap_mode: format!("{:?}", sender.bootstrap_mode()),
+        },
+    );
+    sink_event(
+        sink,
+        UiEvent::ConnectionState {
+            state: "connected".to_string(),
+            detail: format!("session={session_id} dest={dest}"),
+        },
+    );
+}
+
 async fn send_sender_frame(
     sink: &StreamSink<UiEvent>,
     sender: &mut SankakuSender,
@@ -197,24 +629,7 @@ async fn send_sender_frame(
                 "DEBUG: Sankaku sender sent VIDEO packet: stream_id={} frame_index={} bytes={} keyframe={} dest={}",
                 stream_id, frame_index, payload_len, is_keyframe, dest
             );
-            if !*handshake_announced {
-                *handshake_announced = true;
-                let session_id = sender.session_id().unwrap_or_default();
-                sink_event(
-                    sink,
-                    UiEvent::HandshakeComplete {
-                        session_id,
-                        bootstrap_mode: format!("{:?}", sender.bootstrap_mode()),
-                    },
-                );
-                sink_event(
-                    sink,
-                    UiEvent::ConnectionState {
-                        state: "connected".to_string(),
-                        detail: format!("session={session_id} dest={dest}"),
-                    },
-                );
-            }
+            announce_sender_handshake_if_needed(sink, sender, dest, handshake_announced);
 
             sink_event(
                 sink,
@@ -287,12 +702,17 @@ pub fn push_video_frame(
     Ok(())
 }
 
-pub fn push_audio_frame(frame_bytes: Vec<u8>, pts: u64, codec: u8) -> anyhow::Result<()> {
+pub fn push_audio_frame(
+    frame_bytes: Vec<u8>,
+    pts: u64,
+    codec: u8,
+    frames_per_packet: u32,
+) -> anyhow::Result<()> {
     let codec = if codec == 0 { AUDIO_CODEC_OPUS } else { codec };
     let frame_len = frame_bytes.len();
     println!(
-        "DEBUG: Rust received AUDIO frame from Dart: {} bytes (pts_us={}, codec=0x{:02X})",
-        frame_len, pts, codec
+        "DEBUG: Rust received AUDIO frame from Dart: {} bytes (pts_us={}, codec=0x{:02X}, frames_per_packet={})",
+        frame_len, pts, codec, frames_per_packet
     );
     let tx = {
         let guard = audio_frame_tx_slot()
@@ -302,7 +722,7 @@ pub fn push_audio_frame(frame_bytes: Vec<u8>, pts: u64, codec: u8) -> anyhow::Re
             .clone()
             .context("sender is not active; call start_sankaku_sender first")?
     };
-    tx.send((frame_bytes, pts, codec))
+    tx.send((frame_bytes, pts, codec, frames_per_packet))
         .map_err(|_| anyhow!("sender audio ingress channel is closed"))?;
     Ok(())
 }
@@ -376,7 +796,7 @@ async fn run_sender_loop(
     );
 
     let (frame_tx, mut frame_rx) = mpsc::unbounded_channel::<(Vec<u8>, bool, u64, u8)>();
-    let (audio_tx, mut audio_rx) = mpsc::unbounded_channel::<(Vec<u8>, u64, u8)>();
+    let (audio_tx, mut audio_rx) = mpsc::unbounded_channel::<(Vec<u8>, u64, u8, u32)>();
     install_hevc_frame_tx(frame_tx)?;
     install_audio_frame_tx(audio_tx)?;
     let _frame_ingress_guard = FrameIngressGuard;
@@ -405,21 +825,30 @@ async fn run_sender_loop(
                 ).await?;
                 sent_packets = sent_packets.saturating_add(1);
             }
-            Some((audio_bytes, pts, codec)) = audio_rx.recv() => {
+            Some((audio_bytes, pts, codec, frames_per_packet)) = audio_rx.recv() => {
                 if audio_bytes.is_empty() {
                     continue;
                 }
 
                 let audio_len = audio_bytes.len();
                 match sender
-                    .send_audio_frame(audio_stream_id, pts, codec, audio_bytes)
+                    .send_audio_frame(audio_stream_id, pts, codec, frames_per_packet, audio_bytes)
                     .await
                 {
                     Ok(_) => {
                         println!(
-                            "DEBUG: Sankaku sender sent AUDIO packet: stream_id={} bytes={} pts_us={} codec=0x{:02X} dest={}",
-                            audio_stream_id, audio_len, pts, codec, dest
+                            "DEBUG: Sankaku sender sent AUDIO packet: stream_id={} bytes={} pts_us={} codec=0x{:02X} frames_per_packet={} dest={}",
+                            audio_stream_id, audio_len, pts, codec, frames_per_packet, dest
                         );
+                        announce_sender_handshake_if_needed(
+                            &sink,
+                            &sender,
+                            &dest,
+                            &mut handshake_announced,
+                        );
+                        if let Some(bitrate_bps) = sender.take_bitrate_update_bps() {
+                            sink_event(&sink, UiEvent::BitrateChanged { bitrate_bps });
+                        }
                         sent_packets = sent_packets.saturating_add(1);
                     }
                     Err(error) => {
@@ -501,6 +930,7 @@ async fn run_receiver_loop(
 
     let (mut inbound_video, mut inbound_audio) = receiver.spawn_media_channels();
     let mut handshake_announced = false;
+    let mut remote_debug_report_assembly: Option<RemoteDebugReportAssembly> = None;
     let mut shutdown_tick = tokio::time::interval(Duration::from_millis(200));
     shutdown_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -581,6 +1011,12 @@ async fn run_receiver_loop(
                 let Some(frame) = maybe_audio else {
                     break "receiver audio channel closed".to_string();
                 };
+                let session_id = frame.session_id;
+                let stream_id = frame.stream_id;
+                let pts = frame.timestamp_us;
+                let codec = frame.codec;
+                let frames_per_packet = frame.frames_per_packet;
+                let payload = frame.payload;
 
                 if !handshake_announced {
                     handshake_announced = true;
@@ -588,7 +1024,7 @@ async fn run_receiver_loop(
                     sink_event(
                         &sink,
                         UiEvent::HandshakeComplete {
-                            session_id: frame.session_id,
+                            session_id,
                             bootstrap_mode: "Receiver".to_string(),
                         },
                     );
@@ -596,16 +1032,26 @@ async fn run_receiver_loop(
                         &sink,
                         UiEvent::ConnectionState {
                             state: "connected".to_string(),
-                            detail: format!("session={} stream={}", frame.session_id, frame.stream_id),
+                            detail: format!("session={session_id} stream={stream_id}"),
                         },
                     );
+                }
+
+                if codec == AUDIO_CODEC_DEBUG_TEXT {
+                    handle_remote_debug_report_payload(
+                        &sink,
+                        &payload,
+                        &mut remote_debug_report_assembly,
+                    );
+                    continue;
                 }
 
                 sink_event(
                     &sink,
                     UiEvent::AudioFrameReceived {
-                        data: frame.payload,
-                        pts: frame.timestamp_us,
+                        data: payload,
+                        pts,
+                        frames_per_packet,
                     },
                 );
             }

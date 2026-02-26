@@ -78,6 +78,8 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
   private static let annexBStartCode = Data([0x00, 0x00, 0x00, 0x01])
   private static let videoCodecHevc: UInt8 = 0x01
   private static let audioCodecOpus: UInt8 = 0x03
+  private static let opusSampleRateHz: UInt64 = 48_000
+  private static let defaultOpusFramesPerPacket: UInt32 = 960
   private static let hevcOutputCallback: VTCompressionOutputCallback = {
     outputCallbackRefCon,
     _,
@@ -541,13 +543,24 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
       let converter = try ensureAudioConverter(for: sampleBuffer)
       guard
         let pcmBuffer = makePcmBuffer(from: sampleBuffer, format: converter.inputFormat),
-        let opusBytes = encodeOpus(from: pcmBuffer, using: converter),
-        !opusBytes.isEmpty
+        let opusPackets = encodeOpus(from: pcmBuffer, using: converter),
+        !opusPackets.isEmpty
       else {
         return
       }
 
-      emitAudioFrame(opusBytes, ptsUs: ptsUs)
+      var packetPtsUs = ptsUs
+      for packet in opusPackets {
+        emitAudioFrame(
+          packet.data,
+          ptsUs: packetPtsUs,
+          framesPerPacket: packet.framesPerPacket
+        )
+        let frameCount = max(UInt64(1), UInt64(packet.framesPerPacket))
+        packetPtsUs =
+          packetPtsUs
+          &+ ((frameCount * 1_000_000) / Self.opusSampleRateHz)
+      }
     } catch {
       if let dumpError = error as? HevcDumperError {
         audioConverterError = dumpError
@@ -556,13 +569,14 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
     }
   }
 
-  private func emitAudioFrame(_ data: Data, ptsUs: UInt64) {
+  private func emitAudioFrame(_ data: Data, ptsUs: UInt64, framesPerPacket: UInt32) {
     DispatchQueue.main.async { [weak self] in
       guard let eventSink = self?.audioEventSink else { return }
       eventSink([
         "bytes": FlutterStandardTypedData(bytes: data),
         "pts": NSNumber(value: ptsUs),
         "codec": NSNumber(value: Self.audioCodecOpus),
+        "frames_per_packet": NSNumber(value: framesPerPacket),
       ])
     }
   }
@@ -672,17 +686,30 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
     return pcmBuffer
   }
 
+  private struct EncodedOpusPacket {
+    let data: Data
+    let framesPerPacket: UInt32
+  }
+
   private func encodeOpus(from pcmBuffer: AVAudioPCMBuffer, using converter: AVAudioConverter)
-    -> Data?
+    -> [EncodedOpusPacket]?
   {
+    // We encode each capture callback as an independent Opus payload sequence.
+    // Reset the converter state so a prior end-of-stream does not suppress future output.
+    converter.reset()
+
     let packetCapacity = max(
       AVAudioPacketCount(1),
       AVAudioPacketCount((pcmBuffer.frameLength / 1024) + 1)
     )
+    let maximumPacketSize = max(
+      512,
+      converter.maximumOutputPacketSize
+    )
     let outputBuffer = AVAudioCompressedBuffer(
       format: converter.outputFormat,
       packetCapacity: packetCapacity,
-      maximumPacketSize: converter.maximumOutputPacketSize
+      maximumPacketSize: maximumPacketSize
     )
 
     var fedInput = false
@@ -701,12 +728,177 @@ final class HevcDumper: NSObject, FlutterStreamHandler {
     if status == .error {
       if let conversionError {
         NSLog("HevcDumper: Opus conversion failed: \(conversionError)")
+      } else {
+        NSLog("HevcDumper: Opus conversion failed with unknown error")
       }
+      converter.reset()
       return nil
     }
 
-    guard outputBuffer.byteLength > 0 else { return nil }
-    return Data(bytes: outputBuffer.data, count: Int(outputBuffer.byteLength))
+    guard outputBuffer.byteLength > 0, outputBuffer.packetCount > 0 else {
+      NSLog(
+        "HevcDumper: Opus conversion produced no output (status=%@ input_frames=%u packet_capacity=%u)",
+        Self.converterStatusName(status),
+        pcmBuffer.frameLength,
+        packetCapacity
+      )
+      converter.reset()
+      return nil
+    }
+
+    let totalByteLength = Int(outputBuffer.byteLength)
+    let packetCount = Int(outputBuffer.packetCount)
+    let packetDescriptions = outputBuffer.packetDescriptions
+
+    if packetCount == 1 {
+      let packetData = Data(bytes: outputBuffer.data, count: totalByteLength)
+      let framesPerPacket =
+        Self.opusFramesPerPacketHint(from: packetData)
+        ?? packetDescriptions?.pointee.mVariableFramesInPacket
+        ?? Self.defaultOpusFramesPerPacket
+      let packet = EncodedOpusPacket(
+        data: packetData,
+        framesPerPacket: framesPerPacket > 0 ? framesPerPacket : Self.defaultOpusFramesPerPacket
+      )
+      converter.reset()
+      return [packet]
+    }
+
+    guard let packetDescriptions else {
+      NSLog(
+        "HevcDumper: Opus encoder returned multiple packets (%d) without packetDescriptions; dropping buffer",
+        packetCount
+      )
+      return nil
+    }
+
+    var packets: [EncodedOpusPacket] = []
+    packets.reserveCapacity(packetCount)
+    let descriptions = UnsafeBufferPointer(start: packetDescriptions, count: packetCount)
+    for (index, desc) in descriptions.enumerated() {
+      let startOffset = Int(desc.mStartOffset)
+      let byteCount = Int(desc.mDataByteSize)
+      guard startOffset >= 0, byteCount > 0, startOffset + byteCount <= totalByteLength else {
+        NSLog(
+          "HevcDumper: invalid Opus packet description idx=%d start=%d size=%d total=%d",
+          index,
+          startOffset,
+          byteCount,
+          totalByteLength
+        )
+        continue
+      }
+      let packetData = Data(bytes: outputBuffer.data.advanced(by: startOffset), count: byteCount)
+      let describedFramesPerPacket: UInt32? =
+        desc.mVariableFramesInPacket > 0 ? desc.mVariableFramesInPacket : nil
+      let framesPerPacket =
+        Self.opusFramesPerPacketHint(from: packetData)
+        ?? describedFramesPerPacket
+        ?? Self.defaultOpusFramesPerPacket
+      packets.append(
+        EncodedOpusPacket(data: packetData, framesPerPacket: framesPerPacket)
+      )
+    }
+
+    if packets.count > 1 {
+      NSLog(
+        "HevcDumper: split Opus encode output into %d packets (input_frames=%u output_bytes=%u)",
+        packets.count,
+        pcmBuffer.frameLength,
+        outputBuffer.byteLength
+      )
+    }
+
+    converter.reset()
+    return packets.isEmpty ? nil : packets
+  }
+
+  private static func converterStatusName(_ status: AVAudioConverterOutputStatus) -> String {
+    switch status {
+    case .haveData:
+      return "haveData"
+    case .inputRanDry:
+      return "inputRanDry"
+    case .endOfStream:
+      return "endOfStream"
+    case .error:
+      return "error"
+    @unknown default:
+      return "unknown"
+    }
+  }
+
+  private static func opusFramesPerPacketHint(from packetData: Data) -> UInt32? {
+    guard let toc = packetData.first else {
+      return nil
+    }
+
+    let config = toc >> 3
+    guard let samplesPerFrame = opusSamplesPerFrame(tocConfig: config) else {
+      return nil
+    }
+
+    let frameCountCode = toc & 0x03
+    let frameCount: UInt8
+    switch frameCountCode {
+    case 0:
+      frameCount = 1
+    case 1, 2:
+      frameCount = 2
+    case 3:
+      guard packetData.count >= 2 else {
+        return nil
+      }
+      let countByte = packetData[packetData.index(after: packetData.startIndex)]
+      let signaledFrameCount = countByte & 0x3F
+      guard signaledFrameCount > 0 else {
+        return nil
+      }
+      frameCount = signaledFrameCount
+    default:
+      return nil
+    }
+
+    let totalSamples = UInt32(samplesPerFrame) * UInt32(frameCount)
+    guard totalSamples > 0, totalSamples <= 5_760 else {
+      return nil
+    }
+    return totalSamples
+  }
+
+  private static func opusSamplesPerFrame(tocConfig: UInt8) -> UInt32? {
+    switch tocConfig {
+    case 0...11:
+      switch tocConfig & 0x03 {
+      case 0:
+        return 480
+      case 1:
+        return 960
+      case 2:
+        return 1_920
+      case 3:
+        return 2_880
+      default:
+        return nil
+      }
+    case 12...15:
+      return (tocConfig & 0x01) == 0 ? 480 : 960
+    case 16...31:
+      switch tocConfig & 0x03 {
+      case 0:
+        return 120
+      case 1:
+        return 240
+      case 2:
+        return 480
+      case 3:
+        return 960
+      default:
+        return nil
+      }
+    default:
+      return nil
+    }
   }
 
   private func isKeyFrame(_ sampleBuffer: CMSampleBuffer) -> Bool {

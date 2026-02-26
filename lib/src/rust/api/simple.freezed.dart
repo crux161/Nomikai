@@ -149,7 +149,7 @@ return error(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String msg)?  log,TResult Function( String state,  String detail)?  connectionState,TResult Function()?  handshakeInitiated,TResult Function( BigInt sessionId,  String bootstrapMode)?  handshakeComplete,TResult Function( int streamId,  BigInt frameIndex,  BigInt bytes,  BigInt frames)?  progress,TResult Function( String name,  BigInt value)?  telemetry,TResult Function( int streamId,  String reason)?  frameDrop,TResult Function( String code,  String message)?  fault,TResult Function( int bitrateBps)?  bitrateChanged,TResult Function( Uint8List data,  BigInt pts)?  videoFrameReceived,TResult Function( Uint8List data,  BigInt pts)?  audioFrameReceived,TResult Function( String msg)?  error,required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String msg)?  log,TResult Function( String state,  String detail)?  connectionState,TResult Function()?  handshakeInitiated,TResult Function( BigInt sessionId,  String bootstrapMode)?  handshakeComplete,TResult Function( int streamId,  BigInt frameIndex,  BigInt bytes,  BigInt frames)?  progress,TResult Function( String name,  BigInt value)?  telemetry,TResult Function( int streamId,  String reason)?  frameDrop,TResult Function( String code,  String message)?  fault,TResult Function( int bitrateBps)?  bitrateChanged,TResult Function( Uint8List data,  BigInt pts)?  videoFrameReceived,TResult Function( Uint8List data,  BigInt pts,  int framesPerPacket)?  audioFrameReceived,TResult Function( String msg)?  error,required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case UiEvent_Log() when log != null:
 return log(_that.msg);case UiEvent_ConnectionState() when connectionState != null:
@@ -162,7 +162,7 @@ return frameDrop(_that.streamId,_that.reason);case UiEvent_Fault() when fault !=
 return fault(_that.code,_that.message);case UiEvent_BitrateChanged() when bitrateChanged != null:
 return bitrateChanged(_that.bitrateBps);case UiEvent_VideoFrameReceived() when videoFrameReceived != null:
 return videoFrameReceived(_that.data,_that.pts);case UiEvent_AudioFrameReceived() when audioFrameReceived != null:
-return audioFrameReceived(_that.data,_that.pts);case UiEvent_Error() when error != null:
+return audioFrameReceived(_that.data,_that.pts,_that.framesPerPacket);case UiEvent_Error() when error != null:
 return error(_that.msg);case _:
   return orElse();
 
@@ -181,7 +181,7 @@ return error(_that.msg);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String msg)  log,required TResult Function( String state,  String detail)  connectionState,required TResult Function()  handshakeInitiated,required TResult Function( BigInt sessionId,  String bootstrapMode)  handshakeComplete,required TResult Function( int streamId,  BigInt frameIndex,  BigInt bytes,  BigInt frames)  progress,required TResult Function( String name,  BigInt value)  telemetry,required TResult Function( int streamId,  String reason)  frameDrop,required TResult Function( String code,  String message)  fault,required TResult Function( int bitrateBps)  bitrateChanged,required TResult Function( Uint8List data,  BigInt pts)  videoFrameReceived,required TResult Function( Uint8List data,  BigInt pts)  audioFrameReceived,required TResult Function( String msg)  error,}) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String msg)  log,required TResult Function( String state,  String detail)  connectionState,required TResult Function()  handshakeInitiated,required TResult Function( BigInt sessionId,  String bootstrapMode)  handshakeComplete,required TResult Function( int streamId,  BigInt frameIndex,  BigInt bytes,  BigInt frames)  progress,required TResult Function( String name,  BigInt value)  telemetry,required TResult Function( int streamId,  String reason)  frameDrop,required TResult Function( String code,  String message)  fault,required TResult Function( int bitrateBps)  bitrateChanged,required TResult Function( Uint8List data,  BigInt pts)  videoFrameReceived,required TResult Function( Uint8List data,  BigInt pts,  int framesPerPacket)  audioFrameReceived,required TResult Function( String msg)  error,}) {final _that = this;
 switch (_that) {
 case UiEvent_Log():
 return log(_that.msg);case UiEvent_ConnectionState():
@@ -194,7 +194,7 @@ return frameDrop(_that.streamId,_that.reason);case UiEvent_Fault():
 return fault(_that.code,_that.message);case UiEvent_BitrateChanged():
 return bitrateChanged(_that.bitrateBps);case UiEvent_VideoFrameReceived():
 return videoFrameReceived(_that.data,_that.pts);case UiEvent_AudioFrameReceived():
-return audioFrameReceived(_that.data,_that.pts);case UiEvent_Error():
+return audioFrameReceived(_that.data,_that.pts,_that.framesPerPacket);case UiEvent_Error():
 return error(_that.msg);}
 }
 /// A variant of `when` that fallback to returning `null`
@@ -209,7 +209,7 @@ return error(_that.msg);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String msg)?  log,TResult? Function( String state,  String detail)?  connectionState,TResult? Function()?  handshakeInitiated,TResult? Function( BigInt sessionId,  String bootstrapMode)?  handshakeComplete,TResult? Function( int streamId,  BigInt frameIndex,  BigInt bytes,  BigInt frames)?  progress,TResult? Function( String name,  BigInt value)?  telemetry,TResult? Function( int streamId,  String reason)?  frameDrop,TResult? Function( String code,  String message)?  fault,TResult? Function( int bitrateBps)?  bitrateChanged,TResult? Function( Uint8List data,  BigInt pts)?  videoFrameReceived,TResult? Function( Uint8List data,  BigInt pts)?  audioFrameReceived,TResult? Function( String msg)?  error,}) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String msg)?  log,TResult? Function( String state,  String detail)?  connectionState,TResult? Function()?  handshakeInitiated,TResult? Function( BigInt sessionId,  String bootstrapMode)?  handshakeComplete,TResult? Function( int streamId,  BigInt frameIndex,  BigInt bytes,  BigInt frames)?  progress,TResult? Function( String name,  BigInt value)?  telemetry,TResult? Function( int streamId,  String reason)?  frameDrop,TResult? Function( String code,  String message)?  fault,TResult? Function( int bitrateBps)?  bitrateChanged,TResult? Function( Uint8List data,  BigInt pts)?  videoFrameReceived,TResult? Function( Uint8List data,  BigInt pts,  int framesPerPacket)?  audioFrameReceived,TResult? Function( String msg)?  error,}) {final _that = this;
 switch (_that) {
 case UiEvent_Log() when log != null:
 return log(_that.msg);case UiEvent_ConnectionState() when connectionState != null:
@@ -222,7 +222,7 @@ return frameDrop(_that.streamId,_that.reason);case UiEvent_Fault() when fault !=
 return fault(_that.code,_that.message);case UiEvent_BitrateChanged() when bitrateChanged != null:
 return bitrateChanged(_that.bitrateBps);case UiEvent_VideoFrameReceived() when videoFrameReceived != null:
 return videoFrameReceived(_that.data,_that.pts);case UiEvent_AudioFrameReceived() when audioFrameReceived != null:
-return audioFrameReceived(_that.data,_that.pts);case UiEvent_Error() when error != null:
+return audioFrameReceived(_that.data,_that.pts,_that.framesPerPacket);case UiEvent_Error() when error != null:
 return error(_that.msg);case _:
   return null;
 
@@ -879,11 +879,12 @@ as BigInt,
 
 
 class UiEvent_AudioFrameReceived extends UiEvent {
-  const UiEvent_AudioFrameReceived({required this.data, required this.pts}): super._();
+  const UiEvent_AudioFrameReceived({required this.data, required this.pts, required this.framesPerPacket}): super._();
   
 
  final  Uint8List data;
  final  BigInt pts;
+ final  int framesPerPacket;
 
 /// Create a copy of UiEvent
 /// with the given fields replaced by the non-null parameter values.
@@ -895,16 +896,16 @@ $UiEvent_AudioFrameReceivedCopyWith<UiEvent_AudioFrameReceived> get copyWith => 
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is UiEvent_AudioFrameReceived&&const DeepCollectionEquality().equals(other.data, data)&&(identical(other.pts, pts) || other.pts == pts));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is UiEvent_AudioFrameReceived&&const DeepCollectionEquality().equals(other.data, data)&&(identical(other.pts, pts) || other.pts == pts)&&(identical(other.framesPerPacket, framesPerPacket) || other.framesPerPacket == framesPerPacket));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,const DeepCollectionEquality().hash(data),pts);
+int get hashCode => Object.hash(runtimeType,const DeepCollectionEquality().hash(data),pts,framesPerPacket);
 
 @override
 String toString() {
-  return 'UiEvent.audioFrameReceived(data: $data, pts: $pts)';
+  return 'UiEvent.audioFrameReceived(data: $data, pts: $pts, framesPerPacket: $framesPerPacket)';
 }
 
 
@@ -915,7 +916,7 @@ abstract mixin class $UiEvent_AudioFrameReceivedCopyWith<$Res> implements $UiEve
   factory $UiEvent_AudioFrameReceivedCopyWith(UiEvent_AudioFrameReceived value, $Res Function(UiEvent_AudioFrameReceived) _then) = _$UiEvent_AudioFrameReceivedCopyWithImpl;
 @useResult
 $Res call({
- Uint8List data, BigInt pts
+ Uint8List data, BigInt pts, int framesPerPacket
 });
 
 
@@ -932,11 +933,12 @@ class _$UiEvent_AudioFrameReceivedCopyWithImpl<$Res>
 
 /// Create a copy of UiEvent
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') $Res call({Object? data = null,Object? pts = null,}) {
+@pragma('vm:prefer-inline') $Res call({Object? data = null,Object? pts = null,Object? framesPerPacket = null,}) {
   return _then(UiEvent_AudioFrameReceived(
 data: null == data ? _self.data : data // ignore: cast_nullable_to_non_nullable
 as Uint8List,pts: null == pts ? _self.pts : pts // ignore: cast_nullable_to_non_nullable
-as BigInt,
+as BigInt,framesPerPacket: null == framesPerPacket ? _self.framesPerPacket : framesPerPacket // ignore: cast_nullable_to_non_nullable
+as int,
   ));
 }
 

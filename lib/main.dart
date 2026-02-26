@@ -1,11 +1,15 @@
 // ignore_for_file: avoid_print
 
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:nomikai/src/audio_player_service.dart';
 import 'package:nomikai/src/discovery_service.dart';
 import 'package:nomikai/src/hevc_dumper_service.dart';
@@ -20,6 +24,12 @@ const String _sankakuBindHost = '0.0.0.0';
 const String _sankakuReceiverBindAddr = '$_sankakuBindHost:$_sankakuUdpPort';
 const String _manualDialPrefsKey = 'broadcast.manual_destination';
 const String _manualDialPlaceholder = '<Your_Public_IP>:$_sankakuUdpPort';
+const int _audioCodecDebugReport = 0x7E;
+const List<int> _debugReportMagic = <int>[0x4E, 0x52, 0x50, 0x54]; // "NRPT"
+const int _debugReportProtocolVersion = 1;
+const int _debugReportPacketBegin = 0x01;
+const int _debugReportPacketChunk = 0x02;
+const int _debugReportPacketEnd = 0x03;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -53,7 +63,8 @@ class ReceiverScreen extends StatefulWidget {
   State<ReceiverScreen> createState() => _ReceiverScreenState();
 }
 
-class _ReceiverScreenState extends State<ReceiverScreen> {
+class _ReceiverScreenState extends State<ReceiverScreen>
+    with WidgetsBindingObserver {
   final HevcPlayerService _playerService = HevcPlayerService();
   final AudioPlayerService _audioPlayerService = AudioPlayerService();
   late final NomikaiDiscoveryService _discoveryService;
@@ -68,6 +79,7 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
   bool _isReceiving = false;
   bool _isBusy = false;
   bool _audioPlaybackEnabled = true;
+  bool _audioPlaybackSuspendedByLifecycle = false;
   bool _debugConsoleExpanded = false;
 
   int? _textureId;
@@ -81,13 +93,52 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
 
   String _handshakeState = 'idle';
   String _statusLog = 'Ready to receive HEVC stream.';
+  String? _lastRemoteReportPath;
 
   static const int _maxDebugLines = 240;
+  static final RegExp _remoteReportSavedPathPattern = RegExp(
+    r'^\[RemoteReport\] saved file path=(.+?) bytes=',
+  );
+
+  void _appendDebugLineInSetState(String message) {
+    final String line = '[${DateTime.now().toIso8601String()}] $message';
+    _debugLines.add(line);
+    if (_debugLines.length > _maxDebugLines) {
+      _debugLines.removeRange(0, _debugLines.length - _maxDebugLines);
+    }
+  }
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _discoveryService = NomikaiDiscoveryService(logger: _debugLog);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (!_isReceiving ||
+        !_audioPlaybackEnabled ||
+        !_audioPlayerService.isSupported) {
+      return;
+    }
+
+    switch (state) {
+      case AppLifecycleState.inactive:
+      case AppLifecycleState.paused:
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.detached:
+        unawaited(
+          _setReceiverAudioLifecycleSuspended(true, reason: state.name),
+        );
+        break;
+      case AppLifecycleState.resumed:
+        unawaited(
+          _setReceiverAudioLifecycleSuspended(false, reason: state.name),
+        );
+        break;
+    }
   }
 
   void _debugLog(String message) {
@@ -108,6 +159,205 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
     setState(() {
       _debugLines.clear();
     });
+  }
+
+  Future<void> _setReceiverAudioLifecycleSuspended(
+    bool suspended, {
+    required String reason,
+  }) async {
+    if (_audioPlaybackSuspendedByLifecycle == suspended) {
+      return;
+    }
+    _audioPlaybackSuspendedByLifecycle = suspended;
+    try {
+      if (suspended) {
+        await _audioPlayerService.suspendAudio();
+        _debugLog(
+          'DEBUG: Receiver audio playback suspended (lifecycle=$reason).',
+        );
+      } else {
+        await _audioPlayerService.resumeAudio();
+        _debugLog(
+          'DEBUG: Receiver audio playback resumed (lifecycle=$reason).',
+        );
+      }
+    } catch (error) {
+      _debugLog(
+        'DEBUG: Receiver audio lifecycle ${suspended ? 'suspend' : 'resume'} failed: $error',
+      );
+    }
+  }
+
+  String? _extractRemoteReportPath(String message) {
+    final match = _remoteReportSavedPathPattern.firstMatch(message);
+    if (match == null) {
+      return null;
+    }
+    return match.group(1);
+  }
+
+  Future<void> _exportReceiverDebugLogs() async {
+    if (_debugLines.isEmpty) {
+      setState(() {
+        _statusLog = 'No receiver debug logs to export yet.';
+      });
+      return;
+    }
+
+    final now = DateTime.now().toUtc();
+    final safeTs = now
+        .toIso8601String()
+        .replaceAll(':', '-')
+        .replaceAll('.', '-');
+    final defaultName = 'nomikai_receiver_report_$safeTs.log';
+    final String? targetPath = await FilePicker.platform.saveFile(
+      dialogTitle: 'Export Receiver Debug Report',
+      fileName: defaultName,
+      type: FileType.custom,
+      allowedExtensions: const <String>['log', 'txt'],
+    );
+    if (targetPath == null || targetPath.isEmpty) {
+      return;
+    }
+
+    final lines = <String>[
+      'BEGIN RECEIVER_REPORT_FILE ts=${DateTime.now().toIso8601String()}',
+      'platform=$defaultTargetPlatform receiving=$_isReceiving busy=$_isBusy handshake_state=$_handshakeState audio_playback_enabled=$_audioPlaybackEnabled audio_lifecycle_suspended=$_audioPlaybackSuspendedByLifecycle',
+      'status=${_statusLog.replaceAll('\n', ' ')}',
+      'current_bitrate_bps=$_currentReceiveBitrateBps current_fps=${_currentFps.toStringAsFixed(1)} packet_loss_percent=${_packetLossPercent.toStringAsFixed(3)} frame_drops=$_frameDrops',
+      if (_lastRemoteReportPath != null)
+        'last_remote_report_path=$_lastRemoteReportPath',
+      'debug_lines_total=${_debugLines.length}',
+      ..._debugLines,
+      'END RECEIVER_REPORT_FILE',
+    ];
+
+    try {
+      await File(targetPath).writeAsString('${lines.join('\n')}\n');
+      _debugLog('DEBUG: Receiver debug report exported to $targetPath');
+      if (!mounted) return;
+      setState(() {
+        _statusLog = 'Receiver debug report exported: $targetPath';
+      });
+    } catch (error) {
+      _debugLog('DEBUG: Receiver debug export failed: $error');
+      if (!mounted) return;
+      setState(() {
+        _statusLog = 'Receiver debug export failed: $error';
+      });
+    }
+  }
+
+  Future<void> _exportLastRemoteReportCopy() async {
+    final sourcePath = _lastRemoteReportPath;
+    if (sourcePath == null || sourcePath.isEmpty) {
+      setState(() {
+        _statusLog = 'No sender report has been received yet.';
+      });
+      return;
+    }
+
+    final sourceFile = File(sourcePath);
+    final exists = await sourceFile.exists();
+    if (!exists) {
+      setState(() {
+        _statusLog = 'Last sender report file was not found: $sourcePath';
+      });
+      return;
+    }
+
+    final defaultName = sourcePath.split('/').last;
+    final String? targetPath = await FilePicker.platform.saveFile(
+      dialogTitle: 'Export Sender Report Copy',
+      fileName: defaultName,
+      type: FileType.custom,
+      allowedExtensions: const <String>['log', 'txt'],
+    );
+    if (targetPath == null || targetPath.isEmpty) {
+      return;
+    }
+
+    try {
+      final bytes = await sourceFile.readAsBytes();
+      await File(targetPath).writeAsBytes(bytes, flush: true);
+      _debugLog('DEBUG: Copied last sender report to $targetPath');
+      if (!mounted) return;
+      setState(() {
+        _statusLog = 'Sender report copy exported: $targetPath';
+      });
+    } catch (error) {
+      _debugLog('DEBUG: Sender report copy export failed: $error');
+      if (!mounted) return;
+      setState(() {
+        _statusLog = 'Sender report export failed: $error';
+      });
+    }
+  }
+
+  Future<String> _readLastSenderReportContentsForExport() async {
+    final sourcePath = _lastRemoteReportPath;
+    if (sourcePath == null || sourcePath.isEmpty) {
+      return 'No sender report has been received yet.';
+    }
+    try {
+      final file = File(sourcePath);
+      if (!await file.exists()) {
+        return 'Sender report path recorded but file was not found: $sourcePath';
+      }
+      return await file.readAsString();
+    } catch (error) {
+      return 'Failed to read sender report file ($sourcePath): $error';
+    }
+  }
+
+  Future<void> _copyAllLogsToClipboard() async {
+    final now = DateTime.now();
+    try {
+      final nativeAudioLogs = await _audioPlayerService.getAudioDebugLogs();
+      final senderReportText = await _readLastSenderReportContentsForExport();
+
+      final lines = <String>[
+        'BEGIN NOMIKAI_COMBINED_DEBUG_EXPORT ts=${now.toIso8601String()}',
+        'platform=$defaultTargetPlatform receiving=$_isReceiving busy=$_isBusy handshake_state=$_handshakeState',
+        'audio_playback_enabled=$_audioPlaybackEnabled audio_lifecycle_suspended=$_audioPlaybackSuspendedByLifecycle',
+        'status=${_statusLog.replaceAll('\n', ' ')}',
+        'current_bitrate_bps=$_currentReceiveBitrateBps current_fps=${_currentFps.toStringAsFixed(1)} packet_loss_percent=${_packetLossPercent.toStringAsFixed(3)} frame_drops=$_frameDrops',
+        'last_remote_report_path=${_lastRemoteReportPath ?? 'null'}',
+        'receiver_debug_lines_total=${_debugLines.length}',
+        'native_audio_debug_lines_total=${nativeAudioLogs.length}',
+        '--- RECEIVER_FLUTTER_DEBUG_LOGS_BEGIN ---',
+        ..._debugLines,
+        '--- RECEIVER_FLUTTER_DEBUG_LOGS_END ---',
+        '--- RECEIVER_NATIVE_AUDIO_LOGS_BEGIN ---',
+        ...nativeAudioLogs,
+        '--- RECEIVER_NATIVE_AUDIO_LOGS_END ---',
+        '--- LAST_SENDER_REPORT_BEGIN ---',
+        senderReportText,
+        '--- LAST_SENDER_REPORT_END ---',
+        'END NOMIKAI_COMBINED_DEBUG_EXPORT',
+      ];
+
+      final combined = '${lines.join('\n')}\n';
+      await Clipboard.setData(ClipboardData(text: combined));
+      _debugLog(
+        'DEBUG: Combined receiver+sender logs copied to clipboard (${combined.length} chars).',
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _statusLog =
+            'Combined logs copied to clipboard (${combined.length} chars).';
+      });
+    } catch (error) {
+      _debugLog('DEBUG: Copy all logs to clipboard failed: $error');
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _statusLog = 'Copy all logs to clipboard failed: $error';
+      });
+    }
   }
 
   Future<Uint8List> _loadCompressionGraph() async {
@@ -204,6 +454,7 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
       _debugLog('DEBUG: Initializing Audio Player...');
       try {
         await _audioPlayerService.initializeAudio();
+        await _audioPlayerService.clearAudioDebugLogs();
         _audioPlaybackEnabled = true;
         _debugLog('DEBUG: Audio Player initialized.');
       } catch (error) {
@@ -323,6 +574,7 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
     await _receiverEventSubscription?.cancel();
     _receiverEventSubscription = null;
     _stopMetricsTicker();
+    await _audioPlayerService.suspendAudio();
     await _discoveryService.stopBroadcasting();
 
     if (!mounted) {
@@ -345,7 +597,12 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
 
     event.when(
       log: (msg) {
+        final remoteReportPath = _extractRemoteReportPath(msg);
         setState(() {
+          if (remoteReportPath != null) {
+            _lastRemoteReportPath = remoteReportPath;
+          }
+          _appendDebugLineInSetState(msg);
           _statusLog = msg;
         });
       },
@@ -417,13 +674,19 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
           }),
         );
       },
-      audioFrameReceived: (data, pts) {
-        if (!_audioPlaybackEnabled) {
+      audioFrameReceived: (data, pts, framesPerPacket) {
+        _bytesSinceTick += data.length;
+
+        if (!_audioPlaybackEnabled || _audioPlaybackSuspendedByLifecycle) {
           return;
         }
         unawaited(
           _audioPlayerService
-              .pushAudioFrame(data, ptsUs: pts.toInt())
+              .pushAudioFrame(
+                data,
+                ptsUs: pts.toInt(),
+                framesPerPacketHint: framesPerPacket.toInt(),
+              )
               .catchError((Object error) {
                 if (!mounted) {
                   return;
@@ -590,6 +853,23 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
                   ),
                 ),
                 IconButton(
+                  tooltip: 'Copy All Logs',
+                  onPressed: _copyAllLogsToClipboard,
+                  icon: const Icon(Icons.content_copy),
+                ),
+                IconButton(
+                  tooltip: 'Export Logs',
+                  onPressed: _exportReceiverDebugLogs,
+                  icon: const Icon(Icons.save_alt),
+                ),
+                IconButton(
+                  tooltip: 'Export Last Sender Report',
+                  onPressed: _lastRemoteReportPath == null
+                      ? null
+                      : _exportLastRemoteReportCopy,
+                  icon: const Icon(Icons.file_upload_outlined),
+                ),
+                IconButton(
                   tooltip: 'Clear',
                   onPressed: _clearDebugLogs,
                   icon: const Icon(Icons.delete_outline),
@@ -646,7 +926,9 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _metricsTicker?.cancel();
+    unawaited(_audioPlayerService.suspendAudio());
     unawaited(stopSankakuReceiver());
     _receiverEventSubscription?.cancel();
     unawaited(_discoveryService.dispose());
@@ -859,6 +1141,187 @@ class _BroadcastScreenState extends State<BroadcastScreen> {
     });
   }
 
+  void _appendDebugLineInSetState(String message) {
+    final String line = '[${DateTime.now().toIso8601String()}] $message';
+    _debugLines.add(line);
+    if (_debugLines.length > _maxDebugLines) {
+      _debugLines.removeRange(0, _debugLines.length - _maxDebugLines);
+    }
+  }
+
+  Uint8List _u16le(int value) {
+    final ByteData data = ByteData(2)..setUint16(0, value, Endian.little);
+    return data.buffer.asUint8List();
+  }
+
+  Uint8List _u32le(int value) {
+    final ByteData data = ByteData(4)..setUint32(0, value, Endian.little);
+    return data.buffer.asUint8List();
+  }
+
+  Uint8List _buildDebugReportBeginPacket({
+    required int reportId,
+    required String filename,
+    required int totalChunks,
+    required int totalBytes,
+  }) {
+    final Uint8List filenameBytes = Uint8List.fromList(utf8.encode(filename));
+    final BytesBuilder builder = BytesBuilder(copy: false)
+      ..add(_debugReportMagic)
+      ..add(<int>[_debugReportProtocolVersion, _debugReportPacketBegin])
+      ..add(_u32le(reportId))
+      ..add(_u32le(totalChunks))
+      ..add(_u32le(totalBytes))
+      ..add(_u16le(filenameBytes.length))
+      ..add(filenameBytes);
+    return builder.toBytes();
+  }
+
+  Uint8List _buildDebugReportChunkPacket({
+    required int reportId,
+    required int sequence,
+    required Uint8List chunkBytes,
+  }) {
+    final BytesBuilder builder = BytesBuilder(copy: false)
+      ..add(_debugReportMagic)
+      ..add(<int>[_debugReportProtocolVersion, _debugReportPacketChunk])
+      ..add(_u32le(reportId))
+      ..add(_u32le(sequence))
+      ..add(_u16le(chunkBytes.length))
+      ..add(chunkBytes);
+    return builder.toBytes();
+  }
+
+  Uint8List _buildDebugReportEndPacket({
+    required int reportId,
+    required int totalChunks,
+    required int totalBytes,
+  }) {
+    final BytesBuilder builder = BytesBuilder(copy: false)
+      ..add(_debugReportMagic)
+      ..add(<int>[_debugReportProtocolVersion, _debugReportPacketEnd])
+      ..add(_u32le(reportId))
+      ..add(_u32le(totalChunks))
+      ..add(_u32le(totalBytes));
+    return builder.toBytes();
+  }
+
+  Future<void> _sendDebugReportToReceiver() async {
+    if (_isBusy || !_isBroadcasting) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _statusLog = 'Start a call/broadcast before sending a debug report.';
+      });
+      return;
+    }
+
+    final now = DateTime.now();
+    final selectedService = _selectedReceiverService;
+    final allLogs = List<String>.from(_debugLines);
+    final reportLines = <String>[
+      'BEGIN SENDER_REPORT_FILE ts=${now.toIso8601String()}',
+      'platform=$defaultTargetPlatform audio_only=$_isAudioOnlyCall mic_muted=$_isMicrophoneMuted capture_active=$_isCaptureActive broadcasting=$_isBroadcasting handshake_completed=$_senderHandshakeCompleted',
+      'destination=${_activeDestination ?? 'unknown'}',
+      'selected_service.name=${selectedService?.name ?? 'null'}',
+      'selected_service.host=${selectedService?.host ?? 'null'}',
+      'selected_service.port=${selectedService?.port?.toString() ?? 'null'}',
+      'selected_service.addresses=${selectedService?.addresses?.join(',') ?? 'null'}',
+      'sender_progress=${_progress.toStringAsFixed(3)} current_transport_bitrate_bps=$_currentBitrateBps',
+      'status=${_statusLog.replaceAll('\n', ' ')}',
+      'debug_lines_total=${_debugLines.length} debug_lines_included=${allLogs.length}',
+      ...allLogs,
+      'END SENDER_REPORT_FILE',
+    ];
+
+    final String safeTs = now
+        .toUtc()
+        .toIso8601String()
+        .replaceAll(':', '-')
+        .replaceAll('.', '-');
+    final String filename = 'nomikai_sender_report_$safeTs.log';
+    final Uint8List fileBytes = Uint8List.fromList(
+      utf8.encode('${reportLines.join('\n')}\n'),
+    );
+    const int chunkPayloadBytes = 800;
+    final int totalChunks = fileBytes.isEmpty
+        ? 0
+        : (fileBytes.length / chunkPayloadBytes).ceil();
+    final int reportId = now.microsecondsSinceEpoch & 0xFFFFFFFF;
+
+    int packetCount = 0;
+    final basePtsUs = now.microsecondsSinceEpoch;
+
+    try {
+      await pushAudioFrame(
+        frameBytes: _buildDebugReportBeginPacket(
+          reportId: reportId,
+          filename: filename,
+          totalChunks: totalChunks,
+          totalBytes: fileBytes.length,
+        ),
+        pts: BigInt.from(basePtsUs + packetCount),
+        codec: _audioCodecDebugReport,
+        framesPerPacket: 0,
+      );
+      packetCount += 1;
+
+      for (int sequence = 0; sequence < totalChunks; sequence++) {
+        final int start = sequence * chunkPayloadBytes;
+        final int end = math.min(fileBytes.length, start + chunkPayloadBytes);
+        final Uint8List chunkBytes = Uint8List.sublistView(
+          fileBytes,
+          start,
+          end,
+        );
+
+        await pushAudioFrame(
+          frameBytes: _buildDebugReportChunkPacket(
+            reportId: reportId,
+            sequence: sequence,
+            chunkBytes: chunkBytes,
+          ),
+          pts: BigInt.from(basePtsUs + packetCount),
+          codec: _audioCodecDebugReport,
+          framesPerPacket: 0,
+        );
+        packetCount += 1;
+      }
+
+      await pushAudioFrame(
+        frameBytes: _buildDebugReportEndPacket(
+          reportId: reportId,
+          totalChunks: totalChunks,
+          totalBytes: fileBytes.length,
+        ),
+        pts: BigInt.from(basePtsUs + packetCount),
+        codec: _audioCodecDebugReport,
+        framesPerPacket: 0,
+      );
+      packetCount += 1;
+
+      _debugLog(
+        'DEBUG: Sender debug report file sent to receiver (file=$filename bytes=${fileBytes.length} chunks=$totalChunks packets=$packetCount)',
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _statusLog =
+            'Debug report file sent ($packetCount packets, ${fileBytes.length} bytes).';
+      });
+    } catch (error) {
+      _debugLog('DEBUG: Sender debug report send failed: $error');
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _statusLog = 'Failed to send debug report: $error';
+      });
+    }
+  }
+
   void _cancelSenderHandshakeTimeout() {
     _senderHandshakeTimeoutTimer?.cancel();
     _senderHandshakeTimeoutTimer = null;
@@ -1031,6 +1494,7 @@ class _BroadcastScreenState extends State<BroadcastScreen> {
   void initState() {
     super.initState();
     _discoveryService = NomikaiDiscoveryService(logger: _debugLog);
+    _hevcService.setDebugLogger(_debugLog);
     unawaited(_loadManualDestinationPreference());
     _debugLog('DEBUG: Starting mDNS Scanner...');
     unawaited(
@@ -1246,7 +1710,10 @@ class _BroadcastScreenState extends State<BroadcastScreen> {
     int? bitrateToApply;
     setState(() {
       event.when(
-        log: (msg) => _statusLog = msg,
+        log: (msg) {
+          _appendDebugLineInSetState(msg);
+          _statusLog = msg;
+        },
         connectionState: (state, detail) {
           _statusLog = 'Connection [$state]: $detail';
         },
@@ -1291,9 +1758,9 @@ class _BroadcastScreenState extends State<BroadcastScreen> {
             'DEBUG: Sender loop observed video frame event (${data.length} bytes, pts=$pts)',
           );
         },
-        audioFrameReceived: (data, pts) {
+        audioFrameReceived: (data, pts, framesPerPacket) {
           _debugLog(
-            'DEBUG: Sender loop observed audio packet event (${data.length} bytes, pts=$pts)',
+            'DEBUG: Sender loop observed audio packet event (${data.length} bytes, pts=$pts, frames_per_packet=$framesPerPacket)',
           );
         },
         error: (msg) {
@@ -1576,6 +2043,15 @@ class _BroadcastScreenState extends State<BroadcastScreen> {
                         ? Icons.expand_less
                         : Icons.expand_more,
                   ),
+                ),
+                IconButton(
+                  tooltip: 'Send Report',
+                  onPressed: _isBusy || !_isBroadcasting
+                      ? null
+                      : () {
+                          unawaited(_sendDebugReportToReceiver());
+                        },
+                  icon: const Icon(Icons.upload_file),
                 ),
                 IconButton(
                   tooltip: 'Clear',

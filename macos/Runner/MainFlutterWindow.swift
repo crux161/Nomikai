@@ -14,7 +14,7 @@ private enum HevcPlayerChannelError: LocalizedError {
     case .invalidArguments:
       return "Invalid decode_frame arguments. Expected bytes payload (and optional pts)."
     case .invalidAudioArguments:
-      return "Invalid push_audio_frame arguments. Expected bytes payload (and optional pts)."
+      return "Invalid push_audio_frame arguments. Expected bytes payload (and optional pts/frames_per_packet)."
     case .textureRegistryUnavailable:
       return "Flutter texture registry is unavailable."
     case .playerNotInitialized:
@@ -182,7 +182,11 @@ class MainFlutterWindow: NSWindow {
           guard let player = self.audioPlayer else {
             throw HevcPlayerChannelError.audioPlayerNotInitialized
           }
-          player.decodeAndPlay(opusData: payload.data, ptsUs: payload.ptsUs)
+          player.decodeAndPlay(
+            opusData: payload.data,
+            ptsUs: payload.ptsUs,
+            framesPerPacketHint: payload.framesPerPacketHint
+          )
           result(nil)
         } catch {
           result(
@@ -193,6 +197,31 @@ class MainFlutterWindow: NSWindow {
             )
           )
         }
+      case "suspend_audio":
+        self.audioPlayer?.suspendPlayback()
+        result(nil)
+      case "resume_audio":
+        if self.audioPlayer == nil {
+          do {
+            try self.initializeAudioPlayer()
+          } catch {
+            result(
+              FlutterError(
+                code: "AUDIO_RESUME_FAILED",
+                message: error.localizedDescription,
+                details: nil
+              )
+            )
+            return
+          }
+        }
+        self.audioPlayer?.resumePlayback()
+        result(nil)
+      case "get_audio_debug_logs":
+        result(self.audioPlayer?.debugLogSnapshot() ?? [])
+      case "clear_audio_debug_logs":
+        self.audioPlayer?.clearDebugLogs()
+        result(nil)
       default:
         result(FlutterMethodNotImplemented)
       }
@@ -209,9 +238,13 @@ class MainFlutterWindow: NSWindow {
     audioPlayer = player
   }
 
-  private static func decodeAudioPayload(from arguments: Any?) throws -> (data: Data, ptsUs: UInt64) {
+  private static func decodeAudioPayload(from arguments: Any?) throws -> (
+    data: Data,
+    ptsUs: UInt64,
+    framesPerPacketHint: UInt32
+  ) {
     if let typedData = arguments as? FlutterStandardTypedData {
-      return (typedData.data, 0)
+      return (typedData.data, 0, 0)
     }
 
     if
@@ -219,7 +252,10 @@ class MainFlutterWindow: NSWindow {
       let typedData = args["bytes"] as? FlutterStandardTypedData
     {
       let ptsUs = Self.decodePtsUs(args["pts"])
-      return (typedData.data, ptsUs)
+      let framesPerPacketHint = Self.decodeFramesPerPacketHint(
+        args["frames_per_packet"] ?? args["framesPerPacketHint"]
+      )
+      return (typedData.data, ptsUs, framesPerPacketHint)
     }
 
     throw HevcPlayerChannelError.invalidAudioArguments
@@ -238,6 +274,18 @@ class MainFlutterWindow: NSWindow {
     }
     if let value = rawValue as? Int64, value > 0 {
       return UInt64(value)
+    }
+    return 0
+  }
+
+  private static func decodeFramesPerPacketHint(_ rawValue: Any?) -> UInt32 {
+    if let value = rawValue as? NSNumber {
+      let int64Value = value.int64Value
+      if int64Value > 0 {
+        let clamped = min(int64Value, Int64(UInt32.max))
+        return UInt32(clamped)
+      }
+      return 0
     }
     return 0
   }

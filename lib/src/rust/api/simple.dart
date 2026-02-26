@@ -8,8 +8,8 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'simple.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `audio_frame_tx_slot`, `clear_audio_frame_tx`, `clear_hevc_frame_tx`, `hevc_frame_tx_slot`, `install_audio_frame_tx`, `install_hevc_frame_tx`, `run_receiver_loop`, `run_sender_loop`, `send_sender_frame`, `sink_event`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `FrameIngressGuard`, `ReceiverRunGuard`, `SenderRunGuard`
+// These functions are ignored because they are not marked as `pub`: `announce_sender_handshake_if_needed`, `audio_frame_tx_slot`, `clear_audio_frame_tx`, `clear_hevc_frame_tx`, `emit_remote_report_text_lines`, `handle_remote_debug_report_payload`, `hevc_frame_tx_slot`, `install_audio_frame_tx`, `install_hevc_frame_tx`, `parse_u16_le`, `parse_u32_le`, `run_receiver_loop`, `run_sender_loop`, `sanitize_debug_report_filename`, `save_remote_debug_report_file`, `send_sender_frame`, `sink_event`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `FrameIngressGuard`, `ReceiverRunGuard`, `RemoteDebugReportAssembly`, `SenderRunGuard`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `drop`, `drop`, `drop`, `from`
 
 Future<void> pushVideoFrame({
@@ -28,10 +28,12 @@ Future<void> pushAudioFrame({
   required List<int> frameBytes,
   required BigInt pts,
   required int codec,
+  required int framesPerPacket,
 }) => RustLib.instance.api.crateApiSimplePushAudioFrame(
   frameBytes: frameBytes,
   pts: pts,
   codec: codec,
+  framesPerPacket: framesPerPacket,
 );
 
 Future<void> stopSankakuSender() =>
@@ -97,6 +99,7 @@ sealed class UiEvent with _$UiEvent {
   const factory UiEvent.audioFrameReceived({
     required Uint8List data,
     required BigInt pts,
+    required int framesPerPacket,
   }) = UiEvent_AudioFrameReceived;
   const factory UiEvent.error({required String msg}) = UiEvent_Error;
 }

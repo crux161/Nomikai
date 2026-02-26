@@ -104,6 +104,7 @@ fn wire__crate__api__simple__push_audio_frame_impl(
             let api_frame_bytes = <Vec<u8>>::sse_decode(&mut deserializer);
             let api_pts = <u64>::sse_decode(&mut deserializer);
             let api_codec = <u8>::sse_decode(&mut deserializer);
+            let api_frames_per_packet = <u32>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
@@ -112,6 +113,7 @@ fn wire__crate__api__simple__push_audio_frame_impl(
                             api_frame_bytes,
                             api_pts,
                             api_codec,
+                            api_frames_per_packet,
                         )?;
                         Ok(output_ok)
                     })(),
@@ -473,9 +475,11 @@ impl SseDecode for crate::api::simple::UiEvent {
             10 => {
                 let mut var_data = <Vec<u8>>::sse_decode(deserializer);
                 let mut var_pts = <u64>::sse_decode(deserializer);
+                let mut var_framesPerPacket = <u32>::sse_decode(deserializer);
                 return crate::api::simple::UiEvent::AudioFrameReceived {
                     data: var_data,
                     pts: var_pts,
+                    frames_per_packet: var_framesPerPacket,
                 };
             }
             11 => {
@@ -602,10 +606,15 @@ impl flutter_rust_bridge::IntoDart for crate::api::simple::UiEvent {
                 pts.into_into_dart().into_dart(),
             ]
             .into_dart(),
-            crate::api::simple::UiEvent::AudioFrameReceived { data, pts } => [
+            crate::api::simple::UiEvent::AudioFrameReceived {
+                data,
+                pts,
+                frames_per_packet,
+            } => [
                 10.into_dart(),
                 data.into_into_dart().into_dart(),
                 pts.into_into_dart().into_dart(),
+                frames_per_packet.into_into_dart().into_dart(),
             ]
             .into_dart(),
             crate::api::simple::UiEvent::Error { msg } => {
@@ -747,10 +756,15 @@ impl SseEncode for crate::api::simple::UiEvent {
                 <Vec<u8>>::sse_encode(data, serializer);
                 <u64>::sse_encode(pts, serializer);
             }
-            crate::api::simple::UiEvent::AudioFrameReceived { data, pts } => {
+            crate::api::simple::UiEvent::AudioFrameReceived {
+                data,
+                pts,
+                frames_per_packet,
+            } => {
                 <i32>::sse_encode(10, serializer);
                 <Vec<u8>>::sse_encode(data, serializer);
                 <u64>::sse_encode(pts, serializer);
+                <u32>::sse_encode(frames_per_packet, serializer);
             }
             crate::api::simple::UiEvent::Error { msg } => {
                 <i32>::sse_encode(11, serializer);

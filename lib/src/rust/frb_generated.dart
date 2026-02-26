@@ -83,6 +83,7 @@ abstract class RustLibApi extends BaseApi {
     required List<int> frameBytes,
     required BigInt pts,
     required int codec,
+    required int framesPerPacket,
   });
 
   Future<void> crateApiSimplePushVideoFrame({
@@ -147,6 +148,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required List<int> frameBytes,
     required BigInt pts,
     required int codec,
+    required int framesPerPacket,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -155,6 +157,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_list_prim_u_8_loose(frameBytes, serializer);
           sse_encode_u_64(pts, serializer);
           sse_encode_u_8(codec, serializer);
+          sse_encode_u_32(framesPerPacket, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -167,7 +170,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_AnyhowException,
         ),
         constMeta: kCrateApiSimplePushAudioFrameConstMeta,
-        argValues: [frameBytes, pts, codec],
+        argValues: [frameBytes, pts, codec, framesPerPacket],
         apiImpl: this,
       ),
     );
@@ -176,7 +179,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiSimplePushAudioFrameConstMeta =>
       const TaskConstMeta(
         debugName: "push_audio_frame",
-        argNames: ["frameBytes", "pts", "codec"],
+        argNames: ["frameBytes", "pts", "codec", "framesPerPacket"],
       );
 
   @override
@@ -457,6 +460,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         return UiEvent_AudioFrameReceived(
           data: dco_decode_list_prim_u_8_strict(raw[1]),
           pts: dco_decode_u_64(raw[2]),
+          framesPerPacket: dco_decode_u_32(raw[3]),
         );
       case 11:
         return UiEvent_Error(msg: dco_decode_String(raw[1]));
@@ -586,7 +590,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       case 10:
         var var_data = sse_decode_list_prim_u_8_strict(deserializer);
         var var_pts = sse_decode_u_64(deserializer);
-        return UiEvent_AudioFrameReceived(data: var_data, pts: var_pts);
+        var var_framesPerPacket = sse_decode_u_32(deserializer);
+        return UiEvent_AudioFrameReceived(
+          data: var_data,
+          pts: var_pts,
+          framesPerPacket: var_framesPerPacket,
+        );
       case 11:
         var var_msg = sse_decode_String(deserializer);
         return UiEvent_Error(msg: var_msg);
@@ -734,10 +743,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_i_32(9, serializer);
         sse_encode_list_prim_u_8_strict(data, serializer);
         sse_encode_u_64(pts, serializer);
-      case UiEvent_AudioFrameReceived(data: final data, pts: final pts):
+      case UiEvent_AudioFrameReceived(
+        data: final data,
+        pts: final pts,
+        framesPerPacket: final framesPerPacket,
+      ):
         sse_encode_i_32(10, serializer);
         sse_encode_list_prim_u_8_strict(data, serializer);
         sse_encode_u_64(pts, serializer);
+        sse_encode_u_32(framesPerPacket, serializer);
       case UiEvent_Error(msg: final msg):
         sse_encode_i_32(11, serializer);
         sse_encode_String(msg, serializer);
