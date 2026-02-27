@@ -6,8 +6,9 @@ use sankaku_core::{
     AUDIO_CODEC_DEBUG_TEXT, AUDIO_CODEC_OPUS, VIDEO_CODEC_HEVC,
 };
 use std::collections::BTreeMap;
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::task::spawn_blocking;
@@ -18,12 +19,122 @@ type AudioFrameTx = UnboundedSender<(Vec<u8>, u64, u8, u32)>;
 /// Sankaku protocol defaults. Dart currently passes bind/dial addresses explicitly,
 /// but keeping the canonical port here prevents drift across layers.
 pub const DEFAULT_SANKAKU_UDP_PORT: u16 = 9292;
-pub const DEFAULT_SANKAKU_RECEIVER_BIND_HOST: &str = "0.0.0.0";
+pub const DEFAULT_SANKAKU_RECEIVER_BIND_HOST: &str = "[::]";
 
 static HEVC_FRAME_TX: OnceLock<Mutex<Option<HevcFrameTx>>> = OnceLock::new();
 static AUDIO_FRAME_TX: OnceLock<Mutex<Option<AudioFrameTx>>> = OnceLock::new();
 static SENDER_SHOULD_RUN: AtomicBool = AtomicBool::new(false);
 static RECEIVER_SHOULD_RUN: AtomicBool = AtomicBool::new(false);
+
+#[derive(Debug)]
+struct SkipServerVerification;
+
+impl SkipServerVerification {
+    fn new() -> Arc<Self> {
+        Arc::new(Self)
+    }
+}
+
+impl rustls::client::danger::ServerCertVerifier for SkipServerVerification {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        _server_name: &rustls::pki_types::ServerName<'_>,
+        _ocsp: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls::pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls::pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        vec![
+            rustls::SignatureScheme::RSA_PKCS1_SHA1,
+            rustls::SignatureScheme::ECDSA_SHA1_Legacy,
+            rustls::SignatureScheme::RSA_PKCS1_SHA256,
+            rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
+            rustls::SignatureScheme::RSA_PKCS1_SHA384,
+            rustls::SignatureScheme::ECDSA_NISTP384_SHA384,
+            rustls::SignatureScheme::RSA_PKCS1_SHA512,
+            rustls::SignatureScheme::ECDSA_NISTP521_SHA512,
+            rustls::SignatureScheme::RSA_PSS_SHA256,
+            rustls::SignatureScheme::RSA_PSS_SHA384,
+            rustls::SignatureScheme::RSA_PSS_SHA512,
+            rustls::SignatureScheme::ED25519,
+            rustls::SignatureScheme::ED448,
+            rustls::SignatureScheme::ML_DSA_44,
+            rustls::SignatureScheme::ML_DSA_65,
+            rustls::SignatureScheme::ML_DSA_87,
+        ]
+    }
+}
+
+fn make_server_endpoint(bind_addr: &str) -> anyhow::Result<quinn::Endpoint> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let bind_addr: SocketAddr = bind_addr
+        .parse()
+        .with_context(|| format!("invalid bind address: {bind_addr}"))?;
+
+    let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])
+        .context("failed to generate self-signed QUIC certificate")?;
+    let cert_der = rustls::pki_types::CertificateDer::from(
+        cert.serialize_der()
+            .context("failed to serialize QUIC certificate")?,
+    );
+    let key_der = rustls::pki_types::PrivatePkcs8KeyDer::from(cert.serialize_private_key_der());
+
+    let mut server_crypto = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(vec![cert_der], key_der.into())
+        .context("failed to build QUIC rustls server config")?;
+    server_crypto.alpn_protocols = vec![b"sankaku-rt".to_vec()];
+    let server_config = quinn::ServerConfig::with_crypto(Arc::new(
+        quinn::crypto::rustls::QuicServerConfig::try_from(server_crypto)
+            .context("failed to build QUIC server crypto config")?,
+    ));
+
+    quinn::Endpoint::server(server_config, bind_addr)
+        .context("failed to bind QUIC server endpoint")
+}
+
+fn make_client_endpoint() -> anyhow::Result<quinn::Endpoint> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let bind_addr: SocketAddr = "[::]:0"
+        .parse()
+        .context("failed to parse QUIC client bind address")?;
+    let mut client_crypto = rustls::ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(SkipServerVerification::new())
+        .with_no_client_auth();
+    client_crypto.alpn_protocols = vec![b"sankaku-rt".to_vec()];
+    let client_config = quinn::ClientConfig::new(Arc::new(
+        quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto)
+            .context("failed to build QUIC client crypto config")?,
+    ));
+
+    let mut endpoint =
+        quinn::Endpoint::client(bind_addr).context("failed to bind QUIC client endpoint")?;
+    endpoint.set_default_client_config(client_config);
+    Ok(endpoint)
+}
 
 #[frb(init)]
 pub fn init_app() {
@@ -111,6 +222,27 @@ impl From<SankakuEvent> for UiEvent {
 
 fn sink_event(sink: &StreamSink<UiEvent>, event: UiEvent) {
     let _ = sink.add(event);
+}
+
+fn emit_quic_network_telemetry(
+    sink: &StreamSink<UiEvent>,
+    stats: quinn::ConnectionStats,
+) {
+    let rtt_ms = stats.path.rtt.as_millis().min(u128::from(u64::MAX)) as u64;
+    sink_event(
+        sink,
+        UiEvent::Telemetry {
+            name: "path.rtt".to_string(),
+            value: rtt_ms,
+        },
+    );
+    sink_event(
+        sink,
+        UiEvent::Telemetry {
+            name: "udp_tx.dropped".to_string(),
+            value: stats.path.lost_packets as u64,
+        },
+    );
 }
 
 fn hevc_frame_tx_slot() -> &'static Mutex<Option<HevcFrameTx>> {
@@ -748,19 +880,43 @@ async fn run_sender_loop(
         &sink,
         UiEvent::ConnectionState {
             state: "starting".to_string(),
-            detail: format!("dialing {dest}"),
+            detail: format!("establishing QUIC connection to {dest}"),
         },
     );
 
-    let mut sender = SankakuSender::new(&dest).await?;
+    let endpoint = make_client_endpoint()?;
+    let dest_addr: SocketAddr = dest
+        .parse()
+        .with_context(|| format!("invalid destination address: {dest}"))?;
+    let connecting = endpoint.connect(dest_addr, "localhost").map_err(|error| {
+        println!("ERROR: failed to start QUIC connect to {dest_addr}: {error}");
+        anyhow::Error::new(error).context("failed to start QUIC connect")
+    })?;
+    let connection = connecting.await.map_err(|error| {
+        println!("ERROR: failed to establish QUIC connection to {dest_addr}: {error}");
+        anyhow::Error::new(error).context("failed to establish QUIC connection")
+    })?;
+    let local_addr = endpoint
+        .local_addr()
+        .context("failed to read QUIC client local address")?;
+    let remote_addr = connection.remote_address();
+
+    sink_event(
+        &sink,
+        UiEvent::ConnectionState {
+            state: "quic_connected".to_string(),
+            detail: format!("local={local_addr} remote={remote_addr} server_name=localhost"),
+        },
+    );
+
+    let mut sender = SankakuSender::new(connection).await?;
     sender.update_compression_graph(&graph_bytes)?;
-    let local_addr = sender.local_addr()?;
 
     sink_event(
         &sink,
         UiEvent::ConnectionState {
             state: "socket_ready".to_string(),
-            detail: format!("local={local_addr}"),
+            detail: format!("QUIC sender transport ready local={local_addr} remote={remote_addr}"),
         },
     );
     sink_event(&sink, UiEvent::HandshakeInitiated);
@@ -803,11 +959,18 @@ async fn run_sender_loop(
 
     let mut handshake_announced = false;
     let mut sent_packets: u64 = 0;
+    let mut telemetry_tick = tokio::time::interval(Duration::from_secs(1));
+    telemetry_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     SENDER_SHOULD_RUN.store(true, Ordering::Relaxed);
     let _sender_run_guard = SenderRunGuard;
 
     loop {
         tokio::select! {
+            _ = telemetry_tick.tick() => {
+                if let Some(stats) = sender.network_stats() {
+                    emit_quic_network_telemetry(&sink, stats);
+                }
+            }
             Some((frame_bytes, is_keyframe, pts, codec)) = frame_rx.recv() => {
                 if frame_bytes.is_empty() {
                     continue;
@@ -902,9 +1065,10 @@ async fn run_receiver_loop(
         },
     );
 
-    let mut receiver = SankakuReceiver::new(&bind_addr).await?;
-    receiver.update_compression_graph(&graph_bytes)?;
-    let local_addr = receiver.local_addr()?;
+    let endpoint = make_server_endpoint(&bind_addr)?;
+    let local_addr = endpoint
+        .local_addr()
+        .context("failed to read QUIC server local address")?;
 
     sink_event(
         &sink,
@@ -917,9 +1081,38 @@ async fn run_receiver_loop(
         &sink,
         UiEvent::ConnectionState {
             state: "awaiting_peer".to_string(),
-            detail: "waiting for inbound Sankaku frames".to_string(),
+            detail: "waiting for inbound QUIC connection".to_string(),
         },
     );
+
+    let incoming = match endpoint.accept().await {
+        Some(incoming) => incoming,
+        None => {
+            println!(
+                "ERROR: QUIC endpoint stopped before accepting an incoming connection on {local_addr}"
+            );
+            bail!("failed to accept incoming connection");
+        }
+    };
+    let connection = incoming.await.map_err(|error| {
+        println!(
+            "ERROR: failed to establish incoming QUIC connection on {local_addr}: {error}"
+        );
+        anyhow::Error::new(error).context("failed to establish incoming QUIC connection")
+    })?;
+    let remote_addr = connection.remote_address();
+
+    sink_event(
+        &sink,
+        UiEvent::ConnectionState {
+            state: "quic_connected".to_string(),
+            detail: format!("accepted QUIC peer remote={remote_addr} local={local_addr}"),
+        },
+    );
+
+    let mut receiver = SankakuReceiver::new(connection).await?;
+    receiver.update_compression_graph(&graph_bytes)?;
+    let stats_reader = receiver.network_stats_reader();
     sink_event(
         &sink,
         UiEvent::Telemetry {
@@ -932,7 +1125,9 @@ async fn run_receiver_loop(
     let mut handshake_announced = false;
     let mut remote_debug_report_assembly: Option<RemoteDebugReportAssembly> = None;
     let mut shutdown_tick = tokio::time::interval(Duration::from_millis(200));
+    let mut telemetry_tick = tokio::time::interval(Duration::from_secs(1));
     shutdown_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    telemetry_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     let stop_detail = loop {
         if !RECEIVER_SHOULD_RUN.load(Ordering::Relaxed) {
@@ -944,6 +1139,11 @@ async fn run_receiver_loop(
             _ = shutdown_tick.tick() => {
                 if !RECEIVER_SHOULD_RUN.load(Ordering::Relaxed) {
                     break "receiver stop requested".to_string();
+                }
+            }
+            _ = telemetry_tick.tick() => {
+                if let Some(stats) = stats_reader.network_stats() {
+                    emit_quic_network_telemetry(&sink, stats);
                 }
             }
             maybe_video = inbound_video.recv() => {

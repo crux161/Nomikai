@@ -16,11 +16,13 @@ import 'package:nomikai/src/hevc_dumper_service.dart';
 import 'package:nomikai/src/hevc_player_service.dart';
 import 'package:nomikai/src/rust/api/simple.dart';
 import 'package:nomikai/src/rust/frb_generated.dart';
+import 'package:nomikai/src/telemetry_state.dart';
+import 'package:nomikai/src/widgets/debug_overlay.dart';
 import 'package:nsd/nsd.dart' as nsd;
 import 'package:shared_preferences/shared_preferences.dart';
 
 const int _sankakuUdpPort = NomikaiDiscoveryService.defaultSankakuPort;
-const String _sankakuBindHost = '0.0.0.0';
+const String _sankakuBindHost = '[::]';
 const String _sankakuReceiverBindAddr = '$_sankakuBindHost:$_sankakuUdpPort';
 const String _manualDialPrefsKey = 'broadcast.manual_destination';
 const String _manualDialPlaceholder = '<Your_Public_IP>:$_sankakuUdpPort';
@@ -429,6 +431,7 @@ class _ReceiverScreenState extends State<ReceiverScreen>
   Future<void> _startReceiver() async {
     const bindAddr = _sankakuReceiverBindAddr;
     _debugLog('DEBUG: Receiver startup requested. bindAddr=$bindAddr');
+    resetNetworkStats();
 
     if (!_playerService.isSupported) {
       setState(() {
@@ -588,6 +591,7 @@ class _ReceiverScreenState extends State<ReceiverScreen>
       _handshakeState = 'stopped';
       _statusLog = 'Receiver stopped.';
     });
+    resetNetworkStats();
   }
 
   void _onReceiverEvent(UiEvent event) {
@@ -631,6 +635,7 @@ class _ReceiverScreenState extends State<ReceiverScreen>
         );
       },
       telemetry: (name, value) {
+        updateNetworkStatsFromTelemetry(name: name, value: value.toInt());
         setState(() {
           if (name == 'packet_loss_ppm') {
             _packetLossPercent = value.toDouble() / 10_000.0;
@@ -651,6 +656,7 @@ class _ReceiverScreenState extends State<ReceiverScreen>
         });
       },
       bitrateChanged: (bitrateBps) {
+        updateNetworkBitrate(bitrateBps);
         setState(() {
           _statusLog =
               'Sender bitrate updated to ${(bitrateBps / 1_000_000).toStringAsFixed(2)} Mbps';
@@ -777,6 +783,7 @@ class _ReceiverScreenState extends State<ReceiverScreen>
                 label: 'FPS: ${_currentFps.toStringAsFixed(1)}',
               ),
             ),
+            if (_isReceiving) const NetworkDebugOverlay(),
           ],
         ),
       ),
@@ -1540,6 +1547,7 @@ class _BroadcastScreenState extends State<BroadcastScreen> {
     _senderHandshakeCompleted = false;
     _senderFailureRecoveryInFlight = false;
     _debugLog('DEBUG: Sender startup requested. destination=$destination');
+    resetNetworkStats();
     setState(() {
       _isBusy = true;
       _progress = 0.0;
@@ -1552,10 +1560,17 @@ class _BroadcastScreenState extends State<BroadcastScreen> {
       _debugLog('DEBUG: Compression graph loaded. bytes=${graphBytes.length}');
 
       _debugLog('DEBUG: Creating Sankaku sender stream...');
-      final senderEvents = startSankakuSender(
-        dest: destination,
-        graphBytes: graphBytes,
-      );
+      final senderEvents = (() {
+        try {
+          return startSankakuSender(
+            dest: destination,
+            graphBytes: graphBytes,
+          );
+        } catch (error) {
+          _debugLog('DEBUG: QUIC Handshake / Connection Failed: $error');
+          rethrow;
+        }
+      })();
       _debugLog('DEBUG: Sankaku sender stream created.');
 
       _debugLog('DEBUG: Cancelling previous sender event subscription...');
@@ -1566,6 +1581,7 @@ class _BroadcastScreenState extends State<BroadcastScreen> {
       _senderEventSubscription = senderEvents.listen(
         _onEngineEvent,
         onError: (Object error) {
+          _debugLog('DEBUG: QUIC Handshake / Connection Failed: $error');
           _cancelSenderHandshakeTimeout();
           if (!_senderHandshakeCompleted) {
             unawaited(
@@ -1576,7 +1592,7 @@ class _BroadcastScreenState extends State<BroadcastScreen> {
             return;
           }
           setState(() {
-            _statusLog = 'Sender stream error: $error';
+            _statusLog = 'QUIC Handshake / Connection Failed: $error';
           });
         },
       );
@@ -1731,6 +1747,7 @@ class _BroadcastScreenState extends State<BroadcastScreen> {
           );
         },
         telemetry: (name, value) {
+          updateNetworkStatsFromTelemetry(name: name, value: value.toInt());
           _debugLog('DEBUG: Sender telemetry $name=$value');
         },
         frameDrop: (streamId, reason) {
@@ -1745,6 +1762,7 @@ class _BroadcastScreenState extends State<BroadcastScreen> {
           _statusLog = 'FAULT [$code]: $message';
         },
         bitrateChanged: (bitrateBps) {
+          updateNetworkBitrate(bitrateBps);
           _currentBitrateBps = bitrateBps;
           if (!_isAudioOnlyCall) {
             bitrateToApply = bitrateBps;
